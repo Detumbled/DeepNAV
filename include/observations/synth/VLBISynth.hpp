@@ -15,6 +15,20 @@ struct VLBIConfig {
     double minimumElevationRad {0.0};
 };
 
+// Represents a single VLBI observation sample, including the epoch, truth value, noise, observed value, and sigma.
+struct VlbiObservation {
+    std::string utc;
+    std::string stationOneName;
+    std::string stationTwoName;
+    std::string stationOneNaif;
+    std::string stationTwoNaif;
+    double epochTdb {0.0};
+    double delayTruthKm {0.0};
+    double delayNoiseKm {0.0};
+    double delayObservedKm {0.0};
+    double delaySigmaKm {0.0};
+};
+
 class VLBISynth final : public SyntheticObservation {
 public:
     explicit VLBISynth(VLBIConfig vlbi = {}, NoiseConfig noise = {});

@@ -332,6 +332,22 @@ void appendHistory(od::EphemerisInterpolator& ephemeris,
         throw std::runtime_error(message.str());
     }
 
+    // Reversing a baseline at the second receive epoch must recover the same
+    // wavefront with opposite delay, even with moving stations and target.
+    fd::observations::synth::VLBIConfig reverse = vlbi_config;
+    std::swap(reverse.stationOneName, reverse.stationTwoName);
+    reverse.minimumElevationRad = -0.5 * std::acos(-1.0);
+    fd::observations::synth::NoiseConfig no_noise;
+    no_noise.enabled = false;
+    fd::observations::synth::VLBISynth reverse_synth(reverse, no_noise);
+    for (const auto index : {std::size_t{0}, vlbi_set.delays.size() - 1}) {
+        const auto& sample = vlbi_set.delays[index];
+        const double receive_two = sample.epochTdb + sample.truth / fd::perturbations::kSpeedOfLightKmPerSec;
+        const auto reversed = reverse_synth.generate(receive_two, receive_two, kVLBICadenceSec, targetProvider);
+        if (reversed.size() != 1 || std::abs(reversed.front().truth + sample.truth) > 1.0e-6)
+            throw std::runtime_error("Common-emission VLBI baseline reciprocity failed.");
+    }
+
     return vlbi_set;
 }
 
@@ -418,7 +434,7 @@ void writeReport(
            << "# cadence_seconds       : " << kCadenceSec << '\n'
            << "# vlbi_cadence_seconds  : " << kVLBICadenceSec << '\n'
            << "# vlbi_min_samples_per_pair : " << kMinVLBISamplesPerBaseline << '\n'
-           << "# vlbi_model            : differential one-way range, station2_minus_station1_km\n"
+           << "# vlbi_model            : common-emission wavefront delay, station2_minus_station1_km\n"
            << "# columns: utc station epoch_tdb range_truth_shapiro_km range_noise_km range_observed_km "
               "range_sigma_km range_rate_truth_shapiro_km_s range_rate_noise_km_s "
               "range_rate_observed_km_s range_rate_sigma_km_s\n"

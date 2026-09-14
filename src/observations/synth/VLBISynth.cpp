@@ -1,6 +1,7 @@
 #include "observations/synth/VLBISynth.hpp"
 
 #include "stations/StationCatalog.hpp"
+#include "perturbations/Shapiro.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -134,15 +135,26 @@ std::vector<SyntheticObservationSample> VLBISynth::generateWithConfig(
 
         const RelativeGeometry station_one_geometry =
             relativeTargetGeometryFor(vlbi.stationOneName, epoch, targetProvider);
-        const RelativeGeometry station_two_geometry =
-            relativeTargetGeometryFor(vlbi.stationTwoName, epoch, targetProvider);
+
 
         const double station_one_range =
             station_one_geometry.stationToTargetState.segment<3>(0).norm()
             + shapiroRangeDelayFor(vlbi.stationOneName, station_one_geometry, targetProvider);
-        const double station_two_range =
-            station_two_geometry.stationToTargetState.segment<3>(0).norm()
-            + shapiroRangeDelayFor(vlbi.stationTwoName, station_two_geometry, targetProvider);
+        const Eigen::Vector3d emitted_target = targetProvider.stateAt(station_one_geometry.emitEpochTdb).head<3>();
+        const std::string station_two_target = std::to_string(od::stationNaifIdFromName(vlbi.stationTwoName));
+        double receive_two = epoch;
+        double station_two_range = 0.0;
+        for (int iteration = 0; iteration < 12; ++iteration) {
+            const Eigen::Vector3d station = sunRelativeState(station_two_target, receive_two).head<3>();
+            const double geometric = (emitted_target - station).norm();
+            station_two_range = geometric + fd::perturbations::computeShapiroRangeDelay(
+                station.norm(), emitted_target.norm(), geometric,
+                fd::perturbations::kSunGravitationalParameterKm3PerSec2);
+            const double next = epoch + (station_two_range - station_one_range)
+                / fd::perturbations::kSpeedOfLightKmPerSec;
+            if (std::abs(next - receive_two) < 1.0e-9) break;
+            receive_two = next;
+        }
 
         const double truth = station_two_range - station_one_range;
         const double noise = drawNoise();

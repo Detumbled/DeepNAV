@@ -63,9 +63,13 @@ constexpr double kSpiceBodyInterpolationStepSec = 1800.0;
 constexpr double kSpiceStationInterpolationStepSec = 600.0;
 constexpr double kDp853InitialStepSec = 600.0;
 constexpr int kMaxSolverIterations = 50;
-constexpr double kAdoptedRangeSigmaFloorKm = 0.05; //50 meters
-constexpr double kAdoptedRangeRateSigmaFloorKmPerSec = 1.0e-4; //
-constexpr double kAdoptedVLBISigmaFloorKm = 0.001;
+constexpr double kSpeedOfLightKmPerSec = fd::perturbations::kSpeedOfLightKmPerSec;
+constexpr double kAdoptedRangeSigmaFloorKm = 0.005; // 5 m
+constexpr double kAdoptedRangeRateSigmaFloorKmPerSec = 1.0e-7; // 0.1 mm/s
+constexpr double kAdoptedVLBISigmaFloorKm = 0.0005; // 0.5 m
+constexpr double kFiniteDiffPosPerturbationKm = 0.1; // 100 m lower bound
+constexpr double kFiniteDiffVelPerturbationKmPerSec = 1.0e-5; // 10 mm/s lower bound
+constexpr double kRelativeRmsChangeTolerance = 1.0e-4;
 
 constexpr const char* kReportPath = "../tests/voyager_position_estimation_report.txt";
 constexpr const char* kPostfitDiagnosticsCsvPath = "../tests/voyager_od_postfit_diagnostics_VLBI.csv";
@@ -361,8 +365,14 @@ void appendHistory(od::EphemerisInterpolator& ephemeris,
         throw std::runtime_error("DP853 propagation returned an empty ephemeris history.");
     }
 
-    for (const od::DP853Integrator::Result::EphemerisNode& node : result.history) {
+    const auto append = [&](const auto& node) {
+        if (!ephemeris.history().empty() && node.tdb == ephemeris.history().back().tdb) return;
         ephemeris.addNode(node.tdb, node.state, node.derivative);
+    };
+    if (result.history.front().tdb > result.history.back().tdb) {
+        for (auto node = result.history.rbegin(); node != result.history.rend(); ++node) append(*node);
+    } else {
+        for (const auto& node : result.history) append(node);
     }
 }
 
@@ -628,10 +638,13 @@ void appendHistory(od::EphemerisInterpolator& ephemeris,
     for (int iteration = 0; iteration < kMaxLightTimeIterations; ++iteration) {
         const double geometricRangeKm = (spacecraftState.segment<3>(0) - stationPosition).norm();
         const double updatedLightTimeSec =
-            geometricRangeKm / fd::perturbations::kSpeedOfLightKmPerSec;
+            (geometricRangeKm + shapiroDelayForGeometry(stationPosition, spacecraftState.head<3>()))
+            / kSpeedOfLightKmPerSec;
 
         if (std::abs(updatedLightTimeSec - lightTimeSec) < kLightTimeToleranceSec) {
             lightTimeSec = updatedLightTimeSec;
+            spacecraftState = interpolateState(spacecraftEphemeris, receiveEpoch - lightTimeSec,
+                                               "Converged transmit-epoch interpolation");
             break;
         }
 
@@ -654,6 +667,30 @@ void appendHistory(od::EphemerisInterpolator& ephemeris,
     computed.emittedSpacecraftState = spacecraftState;
     computed.stationReceiveState = stationState;
     return computed;
+}
+
+// Station two receives the same emitted wavefront at a different epoch.
+[[nodiscard]] ComputedRange computeCommonEmissionRange(
+    const ComputedRange& stationOne, const StationEphemerisMap& stations,
+    const std::string& stationTwoNaif, double receiveOne) {
+    const Eigen::Vector3d target = stationOne.emittedSpacecraftState.head<3>();
+    double receiveTwo = receiveOne;
+    ComputedRange result;
+    for (int iteration = 0; iteration < kMaxLightTimeIterations; ++iteration) {
+        result.stationReceiveState = stations.at(stationTwoNaif).getState(receiveTwo);
+        const Eigen::Vector3d station = result.stationReceiveState.head<3>();
+        result.geometricRangeKm = (target - station).norm();
+        result.shapiroDelayKm = shapiroDelayForGeometry(station, target);
+        result.rangeKm = result.geometricRangeKm + result.shapiroDelayKm;
+        // Evaluate as a small differential delay to avoid cancellation of ETs.
+        const double next = receiveOne + (result.rangeKm - stationOne.rangeKm) / kSpeedOfLightKmPerSec;
+        if (std::abs(next - receiveTwo) < kLightTimeToleranceSec) break;
+        receiveTwo = next;
+    }
+    result.emitEpochTdb = stationOne.emitEpochTdb;
+    result.lightTimeSec = result.rangeKm / kSpeedOfLightKmPerSec;
+    result.emittedSpacecraftState = stationOne.emittedSpacecraftState;
+    return result;
 }
 
 [[nodiscard]] Prediction predictObservations(const std::vector<Observation>& observations,
@@ -709,10 +746,8 @@ void appendHistory(od::EphemerisInterpolator& ephemeris,
                                        observation.stationOneNaif,
                                        observation.epochTdb);
         const ComputedRange stationTwoRange =
-            computeRangeAtReceiveEpoch(spacecraftEphemeris,
-                                       stationEphemerides,
-                                       observation.stationTwoNaif,
-                                       observation.epochTdb);
+            computeCommonEmissionRange(stationOneRange, stationEphemerides,
+                                       observation.stationTwoNaif, observation.epochTdb);
 
         prediction.values[vlbiOffset + static_cast<Eigen::Index>(i)] =
             stationTwoRange.rangeKm - stationOneRange.rangeKm;
@@ -771,7 +806,17 @@ void appendHistory(od::EphemerisInterpolator& ephemeris,
     double referenceEpoch,
     const State6& nominalState) {
     Eigen::Matrix<double, 6, 1> perturbationSteps;
-    perturbationSteps << 1.0, 1.0, 1.0, 1.0e-4, 1.0e-4, 1.0e-4;
+    const double centralScale = std::cbrt(std::numeric_limits<double>::epsilon());
+    const auto span = ephemerisBoundsForObservations(observations, vlbiObservations);
+    // Use one position scale for r and v*T so velocity differences produce
+    // comparable endpoint displacements over this arc, avoiding Doppler jitter.
+    const double positionScale = nominalState.head<3>().norm();
+    const double velocityScale = positionScale / (span.second - span.first);
+    for (Eigen::Index j = 0; j < 6; ++j) {
+        const double minimum = j < 3 ? kFiniteDiffPosPerturbationKm : kFiniteDiffVelPerturbationKmPerSec;
+        const double scale = j < 3 ? positionScale : velocityScale;
+        perturbationSteps[j] = std::max(centralScale * std::max(std::abs(nominalState[j]), scale), minimum);
+    }
 
     Eigen::MatrixXd design(measurementCount(observations, vlbiObservations), 6);
     std::vector<std::future<std::pair<Eigen::Index, Eigen::VectorXd>>> futures;
@@ -1268,7 +1313,7 @@ void writeReport(const std::filesystem::path& path,
     }
     report << '\n'
            << "# truth_model: initial CSPICE Voyager state propagated with the same DP853 cached-SPICE dynamics used by OD\n"
-           << "# observation_model: Hermite-interpolated one-way light-time + solar Shapiro + centered count-time range-rate + station2-minus-station1 VLBI delay\n"
+           << "# observation_model: Hermite-interpolated one-way light-time + solar Shapiro + centered count-time range-rate + common-emission station2-minus-station1 VLBI wavefront delay\n"
            << "# range_rate_count_time_s: " << kRangeRateCountTimeSec << '\n'
            << "# spice_body_interpolation_step_s: " << kSpiceBodyInterpolationStepSec << '\n'
            << "# spice_station_interpolation_step_s: " << kSpiceStationInterpolationStepSec << '\n'
@@ -1287,6 +1332,7 @@ void writeReport(const std::filesystem::path& path,
            << "# solver_iterations_completed: " << solverResult.iterationCount() << '\n'
            << "# solver_max_iterations: " << solverCriteria.maxIterations << '\n'
            << "# solver_minimum_iterations: " << solverCriteria.minimumIterations << '\n'
+           << "# solver_relative_rms_change_tolerance: 1.0e-4\n"
            << "# solver_weighted_rms_tolerance: " << solverCriteria.weightedRmsTolerance << '\n'
            << "# solver_linearized_postfit_weighted_rms_tolerance: "
            << solverCriteria.linearizedPostfitWeightedRmsTolerance << '\n'
@@ -1438,12 +1484,12 @@ int main() {
         const State6 truthState = spiceState(kTarget, referenceEpoch, kCentralBody, "NONE");
 
         State6 priorState = truthState;
-        priorState << truthState[0] + 50.0,
-                      truthState[1] - 40.0,
-                      truthState[2] + 30.0,
-                      truthState[3] + 5.0e-4,
-                      truthState[4] - 4.0e-4,
-                      truthState[5] + 2.0e-4;
+        priorState << truthState[0] + 5000.0,
+                      truthState[1] - 4000.0,
+                      truthState[2] + 3000.0,
+                      truthState[3] + 5.0e-3,
+                      truthState[4] - 4.0e-3,
+                      truthState[5] + 2.0e-3;
 
         od::DP853Integrator::Options options;
         options.absoluteTolerance = 1.0e-5;
@@ -1522,8 +1568,8 @@ int main() {
                                           truthState);
 
         Eigen::MatrixXd priorCovariance = Eigen::MatrixXd::Zero(6, 6);
-        priorCovariance.diagonal() << 100.0, 100.0, 100.0,
-                                      1.0e-8, 1.0e-8, 1.0e-8;
+        // Set 1-sigma to ~10,000 km (1.0e8 km^2) and 10 m/s (1.0e-4 km^2/s^2)
+        priorCovariance.diagonal() << 1.0e8, 1.0e8, 1.0e8, 1.0e-4, 1.0e-4, 1.0e-4;
 
         fd::filters::WLS filter(kCentralBody);
         filter.setInitialState(priorState, priorCovariance, referenceEpoch);
@@ -1540,8 +1586,8 @@ int main() {
 
 	        fd::filters::BatchLeastSquaresDriver::ConvergenceCriteria solverCriteria;
 	        solverCriteria.maxIterations = kMaxSolverIterations;
-	        solverCriteria.minimumIterations = 5;
-	        solverCriteria.weightedRmsTolerance = 1.01;
+	        solverCriteria.minimumIterations = 2;
+	        solverCriteria.correctionBlockTolerances = {{0, 3, 0.01}, {3, 3, 1.0e-8}};
 
         std::vector<IterationRecord> iterationRecords;
         std::vector<IterationResidualSnapshot> iterationResiduals;
@@ -1570,6 +1616,19 @@ int main() {
                 return problem;
             },
             solverCriteria);
+
+        double previousWeightedRms = std::numeric_limits<double>::quiet_NaN();
+        solver.setConvergenceFunction([&](const auto& iteration, const auto& criteria) {
+            const double relativeChange = std::isfinite(previousWeightedRms)
+                ? std::abs(iteration.weightedRms - previousWeightedRms) / std::max(previousWeightedRms, 1.0e-15)
+                : std::numeric_limits<double>::infinity();
+            previousWeightedRms = iteration.weightedRms;
+            return iteration.iteration >= criteria.minimumIterations && relativeChange < kRelativeRmsChangeTolerance
+                && std::all_of(criteria.correctionBlockTolerances.begin(), criteria.correctionBlockTolerances.end(),
+                    [&](const auto& block) {
+                        return iteration.correction.segment(block.offset, block.size).norm() < block.normTolerance;
+                    });
+        });
 
         const fd::filters::BatchLeastSquaresDriver::Result solverResult =
             solver.solve([&](const fd::filters::BatchLeastSquaresDriver::IterationSummary& iteration) {
