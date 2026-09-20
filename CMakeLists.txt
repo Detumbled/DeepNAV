@@ -135,6 +135,9 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     src/observations/synth/VLBISynth.cpp
     src/perturbations/Gravitational.cpp
     src/perturbations/SRP.cpp
+
+    src/opnav/CameraModel.cpp
+    src/opnav/DistortionModel.cpp
 )
 
 set(BIG_FUNCTIONS_SOURCES)
@@ -160,6 +163,7 @@ set(APP_SOURCE_CANDIDATES
     tests/test_synth_observations.cpp
     tests/test_synth_source_comparison.cpp
     tests/test_voyager_position_od.cpp
+    tests/test_optical.cpp
 )
 
 set(APP_SOURCES)
