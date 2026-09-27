@@ -1,6 +1,6 @@
 #pragma once
 
-#include<Eigen/Dense>
+#include <Eigen/Dense>
 
 namespace fd::opnav {
 
@@ -9,22 +9,16 @@ struct TdbEpoch {
 
     explicit constexpr TdbEpoch(double seconds)
         : secondsPastJ2000(seconds) {}
-
-
 };
 
 
 //Next geometric types for the camera itsfel:
 struct PixelCoordinates {
-    double sample {0.0};
-    double line {0.0};
-    
-
+    double sample{0.0};
+    double line{0.0};
 };
 
 using FocalPlaneCoordinates = Eigen::Vector2d;
-
-
 using NormalizedCoordinates = Eigen::Vector2d;
 
 struct ImageSize {
@@ -38,19 +32,27 @@ struct CameraIntrinsics {
     PixelCoordinates principalPoint; // in pixels
 
     /**
-     * Matrix to convert form focal plane coordinates to pixel coordinates offsets 
-     * 
+        * Matrix to convert form focal plane coordinates to pixel coordinates offsets
+        *
      *    s     s_0   K_x k_xy      x
      *      =       *           *
      *    l     l_0   k_yx K_y      y
-     * 
-     * 
+        *
+        *
      */
-    Eigen::Matrix2d focalPlaneToPixelMatrix_PixelPermm;//Pixels/mm
+    Eigen::Matrix2d focalPlaneToPixelMatrix_PixelPermm; //Pixels/mm
 
-
-   using pixelOffset_t = Eigen::Vector2d;
-
-
+    using pixelOffset_t = Eigen::Vector2d;
 };
+
+//State of the object:
+struct CartesianState {
+    Eigen::Vector3d positionKm{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d velocityKmPerSec{Eigen::Vector3d::Zero()};
+
+    [[nodiscard]] bool isValid() const {
+        return positionKm.allFinite() && velocityKmPerSec.allFinite();
+    }
+};
+
 } // namespace fd::opnav

@@ -3,8 +3,9 @@
 DeepNAV is an orbit-determination and flight-dynamics sandbox for DSN/Voyager
 tracking work.
 The current implementation is centered on C++/Eigen numerical utilities,
-CSPICE-backed station geometry, synthetic observations, perturbation models, and
-batch weighted least-squares filtering.
+CSPICE-backed station geometry, synthetic observations, perturbation models,
+batch weighted least-squares filtering, and an initial optical-navigation
+geometry and camera-model layer.
 
 ## Current Scope
 
@@ -19,9 +20,14 @@ Implemented modules:
 - Interchangeable propagated-ephemeris and direct-CSPICE target-state sources.
 - Solar Shapiro delay applied to synthetic radiometric observables.
 - Modular perturbation models for third-body gravity and cannonball SRP.
+- A reusable Cartesian state type and simultaneous-epoch geometric
+  camera-to-target line of sight, independent of CSPICE.
+- Pinhole camera projection with optional OpenCV-compatible radial and
+  tangential distortion.
 - Focused tests for numerical integration, ephemeris interpolation, synthetic
-  observations, station-kernel sanity checks, and a Voyager 1 position OD case
-  that exercises WLS and the perturbation models.
+  observations, optical geometry and projection, station-kernel sanity checks,
+  and a Voyager 1 position OD case that exercises WLS and the perturbation
+  models.
 
 Planned or partial areas:
 
@@ -29,7 +35,8 @@ Planned or partial areas:
   Voyager test into reusable library modules.
 - Full dynamics builder that sums central gravity, third bodies, SRP, and future force models.
 - Sequential filters and richer OD diagnostics.
-- Attitude/AOCS and visualization work.
+- Optical-navigation attitude transformations, light-time/apparent-direction
+  corrections, image measurements, and visualization work.
 
 Longer-term directions include nonlinear optimization for trajectory and
 maneuver design, plus multi-agent spaceborne/ground antenna tracking. CppAD,
@@ -44,8 +51,15 @@ include/
   DP853Integrator.hpp
   RKF45Integrator.hpp
   dynamics/
+    CartesianState.hpp
     EphemerisInterpolator.hpp
     SpiceInterpolator.hpp
+  opnav/
+    CameraModel.hpp
+    DistortionModel.hpp
+    Types.hpp
+    core/
+      GeometricLineOfSight.hpp
   stations/
     ElevationMask.hpp
     StationCatalog.hpp
@@ -73,6 +87,11 @@ src/
   dynamics/
     EphemerisInterpolator.cpp
     SpiceInterpolator.cpp
+  opnav/
+    CameraModel.cpp
+    DistortionModel.cpp
+    core/
+      GeometricLineOfSight.cpp
   stations/
     ElevationMask.cpp
     StationCatalog.cpp
@@ -92,6 +111,8 @@ src/
 
 tests/
   test_ephemeris_interpolator.cpp
+  test_geometric_line_of_sight.cpp
+  test_optical.cpp
   test_synth_observations.cpp
   test_synth_source_comparison.cpp
   test_voyager_position_od.cpp
@@ -104,12 +125,19 @@ kernels.tm
 
 ## Dependencies
 
-The CMake project is named `DeepNAV`, uses C++23, and links these dependencies:
+The CMake project is named `DeepNAV`, uses ISO C++23, and links these dependencies:
 
 - Eigen3
 - CSPICE
 - GLFW, GLEW, OpenGL
 - local `third_party/imgui`, `third_party/implot`, and `third_party/glm`
+
+On macOS, the checked-in preset uses `/usr/bin/clang` and `/usr/bin/clang++`.
+This keeps the compiler and macOS SDK matched and avoids the missing
+`INFINITY`/`NAN` definitions observed with Homebrew LLVM 21 in strict C++23
+mode. ImGui and ImPlot include paths are marked as third-party `SYSTEM` paths;
+their intentional raw-memory implementation warning is disabled only for the
+`imgui_lib` target, not for DeepNAV sources.
 
 The optional diagnostic scripts under `tests/` use Python 3, NumPy, Matplotlib,
 and, for `plot_observability.py`, pandas.
@@ -130,11 +158,18 @@ For tests or demos that load `../kernels.tm`, run from `build-clang`.
 
 ## Build
 
-On Apple Silicon with the expected Homebrew paths, the included preset creates
-the conventional `build-clang` directory:
+On Apple Silicon, the included Apple Clang preset uses Homebrew dependency
+paths and creates the conventional `build-clang` directory:
 
 ```sh
-cmake --preset homebrew-clang
+cmake --preset apple-clang
+```
+
+When changing compiler presets in an existing build directory, refresh the
+CMake cache before rebuilding:
+
+```sh
+cmake --fresh --preset apple-clang
 ```
 
 For other toolchains, configure the same directory directly:
@@ -149,6 +184,8 @@ cmake --build build-clang --target test_ephemeris_interpolator -j4
 cmake --build build-clang --target test_synth_observations -j4
 cmake --build build-clang --target test_synth_source_comparison -j4
 cmake --build build-clang --target test_voyager_position_od -j4
+cmake --build build-clang --target test_optical -j4
+cmake --build build-clang --target test_geometric_line_of_sight -j4
 cmake --build build-clang --target station_catalog_demo -j4
 ```
 
@@ -165,6 +202,8 @@ ctest --test-dir build-clang -R test_ephemeris_interpolator --output-on-failure
 ctest --test-dir build-clang -R test_synth_observations --output-on-failure
 ctest --test-dir build-clang -R test_synth_source_comparison --output-on-failure
 ctest --test-dir build-clang -R test_voyager_position_od --output-on-failure
+ctest --test-dir build-clang -R test_optical --output-on-failure
+ctest --test-dir build-clang -R test_geometric_line_of_sight --output-on-failure
 ```
 
 SPICE-backed tests are registered with `build-clang` as their working directory
@@ -180,6 +219,46 @@ report.
 an all-test run.
 
 ## Implemented Components
+
+### Optical Navigation
+
+The optical-navigation code is split into a CSPICE-independent geometry layer
+and a camera projection layer.
+
+`fd::dynamics::CartesianState` stores position in kilometres and velocity in
+kilometres per second. Its `allFinite()` validation covers both state
+components. Velocity is retained for future apparent-direction and light-time
+work, although the current simultaneous-epoch geometry uses position only.
+
+`fd::opnav::core::computeGeometricLineOfSight(...)` calculates:
+
+```text
+vectorKm      = target.positionKm - camera.positionKm
+rangeKm       = |vectorKm|
+unitDirection = vectorKm / rangeKm
+```
+
+The function rejects non-finite states and coincident camera/target positions.
+It does not perform CSPICE retrieval, light-time iteration, stellar aberration,
+attitude transformations, or camera projection. `test_geometric_line_of_sight`
+covers a hand-computable geometry, unit direction and range, translation
+invariance, coincident positions, and non-finite input.
+
+`fd::opnav::CameraModel` projects a direction already expressed in the camera
+frame onto pixel coordinates. It supports an identity distortion model and an
+OpenCV-compatible rational radial plus tangential distortion model. Directions
+with non-finite components or a non-positive camera-frame Z component are
+rejected. `test_optical` covers ideal projection, zero and non-zero distortion,
+boresight projection, and targets behind the camera.
+
+The current processing boundary is therefore:
+
+```text
+Cartesian states -> geometric LOS -> camera-frame direction -> pixel
+```
+
+The attitude transformation needed to produce the camera-frame direction is
+not implemented yet.
 
 ### Station Catalog
 

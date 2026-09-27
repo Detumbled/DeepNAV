@@ -2,14 +2,14 @@
   "version": 3,
   "configurePresets": [
     {
-      "name": "homebrew-clang",
-      "displayName": "Homebrew Clang",
-      "description": "Builds using the latest Clang from Homebrew",
+      "name": "apple-clang",
+      "displayName": "Apple Clang",
+      "description": "Builds using the Apple Clang toolchain matched to the macOS SDK",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-clang",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "/opt/homebrew/opt/llvm/bin/clang",
-        "CMAKE_CXX_COMPILER": "/opt/homebrew/opt/llvm/bin/clang++",
+        "CMAKE_C_COMPILER": "/usr/bin/clang",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_PREFIX_PATH": "/opt/homebrew/opt/eigen;/opt/homebrew",
         "CMAKE_AR": "/usr/bin/ar",

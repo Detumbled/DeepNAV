@@ -66,10 +66,18 @@ add_library(imgui_lib STATIC
     ${IMPLOT_DIR}/implot_items.cpp
 )
 
-target_include_directories(imgui_lib PUBLIC
+target_include_directories(imgui_lib SYSTEM PUBLIC
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMPLOT_DIR}
+)
+
+# ImGui deliberately uses raw memory operations for some internal types.
+# Newer Clang versions diagnose this vendor implementation pattern, so keep
+# that warning scoped to the third-party target rather than disabling it for
+# DeepNAV sources.
+target_compile_options(imgui_lib PRIVATE
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>:-Wno-nontrivial-memcall>
 )
 
 # ImGui needs GLFW + OpenGL — reuse what you already found
@@ -138,6 +146,7 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
 
     src/opnav/CameraModel.cpp
     src/opnav/DistortionModel.cpp
+    src/opnav/core/GeometricLineOfSight.cpp
 )
 
 set(BIG_FUNCTIONS_SOURCES)
@@ -164,6 +173,9 @@ set(APP_SOURCE_CANDIDATES
     tests/test_synth_source_comparison.cpp
     tests/test_voyager_position_od.cpp
     tests/test_optical.cpp
+    tests/test_geometric_line_of_sight.cpp
+
+    tests/Optical/test_opnav_geometry.cpp
 )
 
 set(APP_SOURCES)
@@ -176,7 +188,20 @@ endforeach()
 foreach(app_src IN LISTS APP_SOURCES)
     get_filename_component(app_name "${app_src}" NAME_WE)
     add_executable(${app_name} "${app_src}")
-    target_link_libraries(${app_name} PRIVATE big_functions)
+
+    if(app_name STREQUAL "test_geometric_line_of_sight")
+        # Keep this geometry-only test independent of CSPICE and the graphics
+        # stack. The implementation remains part of big_functions above.
+        target_sources(${app_name} PRIVATE
+            src/opnav/core/GeometricLineOfSight.cpp
+        )
+        target_include_directories(${app_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
+    else()
+        target_link_libraries(${app_name} PRIVATE big_functions)
+    endif()
 
     if(app_name STREQUAL "test_synth_observations"
        OR app_name STREQUAL "test_synth_source_comparison"
