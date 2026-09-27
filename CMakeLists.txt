@@ -133,6 +133,8 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     src/RKF45Integrator.cpp
     src/dynamics/EphemerisInterpolator.cpp
     src/dynamics/SpiceInterpolator.cpp
+    src/dynamics/ConstantStateProvider.cpp
+    src/dynamics/LinearStateProvider.cpp
     src/filters/filter.cpp
     src/filters/WLS.cpp
     src/filters/BatchLeastSquaresDriver.cpp
