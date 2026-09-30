@@ -1,4 +1,5 @@
 build-clang/
+/Output clocks/
 .DS_Store
 .vscode/
 Kernels/

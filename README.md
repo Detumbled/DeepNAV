@@ -24,6 +24,8 @@ Implemented modules:
   camera-to-target line of sight, independent of CSPICE.
 - Pinhole camera projection with optional OpenCV-compatible radial and
   tangential distortion.
+- Two-state residual clock dynamics, seeded truth simulation, Allan-data
+  configuration, covariance propagation, and conservative calibration budgets.
 - Focused tests for numerical integration, ephemeris interpolation, synthetic
   observations, optical geometry and projection, station-kernel sanity checks,
   and a Voyager 1 position OD case that exercises WLS and the perturbation
@@ -48,6 +50,16 @@ The active library and test modules wired into CMake are:
 
 ```text
 include/
+  Clocks/
+    Types.hpp
+    Clocks.hpp
+    ClockHistory.hpp
+    ClockModel.hpp
+    LocalOscillator.hpp
+    DSAC.hpp
+    ClockTruthSimulator.hpp
+    Allan.hpp
+    Calibration.hpp
   DP853Integrator.hpp
   RKF45Integrator.hpp
   dynamics/
@@ -78,11 +90,25 @@ include/
     Gravitational.hpp
     SRP.hpp
     Shapiro.hpp
-  utils/CSPICE/
-    SpiceError.hpp
-    SpiceErrorModeGuard.hpp
+  utils/
+    ClockCsvWriter.hpp
+    CSPICE/
+      SpiceError.hpp
+      SpiceErrorModeGuard.hpp
 
 src/
+  Clocks/
+    Clocks.cpp
+    ClockHistory.cpp
+    ClockModel.cpp
+    LocalOscillator.cpp
+    DSAC.cpp
+    ClockTruthSimulator.cpp
+    Allan.cpp
+    Calibration.cpp
+    Validation.hpp
+  utils/
+    ClockCsvWriter.cpp
   RKF45Integrator.cpp
   dynamics/
     EphemerisInterpolator.cpp
@@ -110,6 +136,9 @@ src/
     SRP.cpp
 
 tests/
+  test_clocks.cpp
+  test_clock_history.cpp
+  test_plot_clocks.py
   test_ephemeris_interpolator.cpp
   test_geometric_line_of_sight.cpp
   test_optical.cpp
@@ -121,6 +150,7 @@ test_rkf45.cpp
 test_stations.cpp
 station_catalog_demo.cpp
 kernels.tm
+plot_clocks.py
 ```
 
 ## Dependencies
@@ -204,6 +234,10 @@ ctest --test-dir build-clang -R test_synth_source_comparison --output-on-failure
 ctest --test-dir build-clang -R test_voyager_position_od --output-on-failure
 ctest --test-dir build-clang -R test_optical --output-on-failure
 ctest --test-dir build-clang -R test_geometric_line_of_sight --output-on-failure
+ctest --test-dir build-clang -R '^test_clocks$' --output-on-failure
+ctest --test-dir build-clang -R '^test_clock_history$' --output-on-failure
+python3 test_clocks.py # Independent reference checks; requires NumPy.
+python3 -m unittest discover -s tests -p test_plot_clocks.py # Requires Pandas/Matplotlib.
 ```
 
 SPICE-backed tests are registered with `build-clang` as their working directory
@@ -219,6 +253,180 @@ report.
 an all-test run.
 
 ## Implemented Components
+
+### Clocks
+
+The independent `include/Clocks` module uses the `fd::clocks` namespace.
+`Clocks/Clocks.hpp` defines the abstract interface; `LocalOscillator`, `DSAC`,
+`ClockModel`, and `ClockTruthSimulator` each have their own header and source
+file. Common types, Allan analysis, and calibration helpers are separated into
+`Types.hpp`, `Allan.hpp`, and `Calibration.hpp`. Bias is clock time minus reference time in seconds;
+fractional frequency is dimensionless. Use elapsed time since calibration.
+Known deterministic frequency drift has units s^-1. The model contains white
+frequency diffusion (`q_bias_s`, units s) and random walk frequency diffusion
+(`q_frequency_per_s`, units s^-1).
+
+Both clock classes expose `fromParameters` and `fromAllanData`. Allan fitting
+uses variance, requires explicit drift removal (or zero drift), a declared
+valid tau interval and a noise assumption, and rejects negative coefficients,
+ill-conditioned data and excessive residuals. One Allan point is accepted only
+with a single dominant noise assumption. The default maximum relative variance
+residual is 5%, configurable by the caller. All DSAC configurations are custom;
+no published hardware preset is supplied. Allan data do not determine initial
+bias, fractional frequency, their covariance, or the removed drift.
+
+```cpp
+#include "Clocks/Calibration.hpp"
+#include "Clocks/ClockTruthSimulator.hpp"
+#include "Clocks/LocalOscillator.hpp"
+using namespace fd::clocks;
+
+// Synthetic coefficients for illustration, not hardware specifications.
+const auto clock = LocalOscillator::fromParameters({2e-15, 1e-24, 3e-26});
+ClockTruthSimulator truth(clock, 42); // clock must outlive truth.
+const ClockState initial{2e-9, 1e-11};
+const auto predicted = clock.propagate(initial, 10.0);
+const auto simulated = truth.step(initial, 10.0);
+const auto covariance = propagateClockCovariance(
+    clock, ClockCovariance::Zero(), 10.0);
+
+const auto interval = clockCalibrationInterval(1.0, 30.0 * 86400.0,
+    clock.parameters(), ClockBudget{.initial_state = initial});
+// nullopt means > the specified horizon; zero means initial threshold contact.
+```
+
+`ClockTruthSimulator` uses exact correlated increments, including zero and
+single-noise cases. Seeds reproduce samples within the same standard-library
+implementation; they do not reproduce Python samples. Deterministic propagation
+and covariance calculations draw no random numbers. Covariance propagation
+supports a general symmetric positive semidefinite initial covariance.
+
+`overlappingAllanDeviation` consumes uniformly sampled bias and an integer
+averaging factor; `theoreticalAllanDeviation` optionally includes unremoved
+deterministic drift. The calibration helper instead uses a monotonic envelope
+with absolute deterministic terms and independent initial uncertainties. Its
+default k=3 is a pointwise budget, not a probability guarantee for an entire
+trajectory. Thresholds bound the equivalent one-way range contribution in
+metres, not 3D position error or operational contact schedules. This two-noise
+model excludes environmental effects, flicker noise and uncertain drift.
+
+Build with `cmake --build build-clang --target test_clocks -j4`, then run the
+focused CTest command above. The test target links Eigen only and exercises
+both implementations through the base interface, Allan conversion/rejection,
+empirical Q including cross-covariance, pure and combined Allan noise, drift,
+general covariance propagation, and analytic calibration limits. The module is
+also included in `big_functions`; it is not yet connected to an EKF or to the
+radiometric measurement generators.
+
+Clock history is optional and owned by the base `Clocks` class through
+`ClockHistory`. Clocks are movable and noncopyable, so a large trajectory is
+never copied implicitly. `enableHistory(capacity, includeCovariance)` creates
+a fresh empty collection and reserves one contiguous sample vector; recording
+cannot exceed the explicit sample limit or grow the allocation. Five doubles
+per sample use approximately 40 bytes of payload (about 40 MB for one million
+samples). `clearHistory()` retains the allocation; `disableHistory()` releases
+it. Manual `recordSample()` calls are ignored when history is disabled.
+
+`propagate()` and `step()` do not record. `ClockTruthSimulator::run()` explicitly
+records accepted truth states, starting at elapsed time zero, and requires an
+empty history. Pass a mutable clock reference to the simulator for recording.
+The stride records the initial sample, every `recordEvery` steps, and the final
+sample once. `ClockHistory::requiredCapacity(N, r)` computes the required limit
+with overflow checks. The variable-step overload accepts a span of time steps
+and uses the actual accumulated elapsed time. Each Monte Carlo realization
+must own its clock/history; there is no shared-writer synchronization.
+
+```cpp
+#include "Clocks/ClockTruthSimulator.hpp"
+#include "Clocks/LocalOscillator.hpp"
+#include "utils/ClockCsvWriter.hpp"
+using namespace fd::clocks;
+
+auto clock = LocalOscillator::fromParameters({2e-15, 1e-24, 3e-26});
+constexpr std::size_t steps = 360, stride = 6;
+clock.enableHistory(ClockHistory::requiredCapacity(steps, stride), true);
+ClockTruthSimulator truth(clock, 42);
+const ClockCovariance p0 = ClockCovariance::Zero(); // Explicit known initial uncertainty.
+const auto finalState = truth.run(steps, 240.0, {2e-9, 1e-11}, stride, p0);
+fd::utils::writeClockCsv("local.csv", *clock.history()); // Refuses existing files.
+// To replace a file, explicitly pass fd::utils::ClockCsvWriteMode::Overwrite.
+```
+
+Covariance history requires an explicit P0 and stores only `sqrt(P_bb)` and
+`sqrt(P_yy)` alongside time, bias and fractional frequency. It does not infer
+uncertainty from truth samples. CSV export occurs after simulation, preserves
+double precision and units, and omits both sigma columns when covariance is
+absent. An empty history exports only the header. `writeClockCsv` reports file
+opening/writing errors and never appends implicitly.
+
+`plot_clocks.py` is standalone and reads one or more CSV files into separate
+Pandas DataFrames. It rejects invalid schemas, duplicate headers, missing or
+nonfinite numbers, negative sigma and nonincreasing/negative timestamps. It
+creates three separate figures/windows, with an independent vertical scale
+for every clock so the smaller DSAC curve remains visible:
+
+- Main figure: signed one-way range error and total pointwise budget
+  `c*(abs(mu_bias) + k*sigma_bias_s)` (default k=3).
+- Uncertainty figure: stochastic contribution `k*c*sigma_bias_s`, excluding
+  the deterministic mean.
+- Support figure: bias in ns and fractional frequency.
+
+The total budget requires explicit deterministic mean histories supplied via
+`--mean-csv`, one per input clock, at identical recorded timestamps. Those CSVs
+use the same primitive schema and store the expected bias obtained by noiseless
+propagation; the noisy realization is never treated as its own mean. Without
+mean histories or covariance, the corresponding panel explains the missing
+inputs instead of inventing a budget. This pointwise budget is not Allan
+deviation or a guarantee for an entire sample path.
+
+`--threshold-m` draws signed thresholds for range and positive thresholds for
+budget/uncertainty, annotating the first recorded contact from all input rows
+before display reduction. It reports the preceding sample time too. These are
+sampled contacts; an earlier unobserved crossing between samples can be missed.
+
+```sh
+python3 -m pip install pandas matplotlib
+python3 plot_clocks.py local.csv dsac.csv --mean-csv local_mean.csv dsac_mean.csv --labels Local DSAC --threshold-m 1 --output clocks.png
+python3 plot_clocks.py local.csv --time-unit days --threshold-m 1 --output clocks.pdf
+python3 plot_clocks.py local.csv --max-points 0 --show --output clocks.svg
+```
+
+The plotter uses a noninteractive backend unless `--show` is supplied. PNG,
+PDF and SVG are supported. `--output clocks.png` saves the main figure there
+and the other figures to `clocks_uncertainty.png` and `clocks_diagnostics.png`.
+With `--show`, all three windows open together. Its default limit of 20000 points per curve preserves
+the endpoints and only affects display; narrow peaks can be missed. Original
+CSV data are untouched. Reduced histories (especially an extra final sample)
+may be nonuniform and must not automatically be used for Allan estimates or
+first-crossing analysis. Keep simulation parameters and seeds in the run's
+configuration; filenames do not establish hardware performance.
+
+Build the recording checks with
+`cmake --build build-clang --target test_clock_history -j4`. Running
+`build-clang/test_clock_history` automatically creates `Output clocks` in the
+project root and saves `local.csv`, `dsac.csv`, `local_mean.csv`, and
+`dsac_mean.csv` there, replacing previous synthetic outputs. Both realizations
+cover the same 24-hour interval and include covariance. Mean files are exported
+separately from deterministic propagation. This destination is independent of the working directory;
+change `defaultOutputDirectory` in `tests/test_clock_history.cpp` to customize it,
+or pass an output directory as a command-line argument. For example:
+
+```sh
+./build-clang/test_clock_history
+python3 plot_clocks.py "Output clocks/local.csv" "Output clocks/dsac.csv" \
+  --mean-csv "Output clocks/local_mean.csv" "Output clocks/dsac_mean.csv" \
+  --labels "Local (synthetic)" "DSAC (custom synthetic)" \
+  --threshold-m 1 --output "Output clocks/clocks.png" --show
+```
+
+CSV validation artifacts remain temporary; only simulation CSVs are retained.
+Generated files in `Output clocks` are ignored by Git. Their
+parameters and seeds are defined in `tests/test_clock_history.cpp` and printed
+at execution, including initial conditions, drift, noise intensities, P0 and
+sampling. The coefficients remain synthetic validation values; the mathematical
+Allan checks do not establish OCXO/DSAC hardware performance or ESA suitability.
+Python tests
+also exercise C++ exports when that executable is available.
 
 ### Optical Navigation
 

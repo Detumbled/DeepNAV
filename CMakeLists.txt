@@ -127,7 +127,21 @@ endif()
 # ------------------------------
 # 6. Static Library (Astro functions)
 # ------------------------------
+set(CLOCK_SOURCES
+    src/Clocks/Clocks.cpp
+    src/Clocks/ClockHistory.cpp
+    src/Clocks/ClockModel.cpp
+    src/Clocks/LocalOscillator.cpp
+    src/Clocks/DSAC.cpp
+    src/Clocks/ClockTruthSimulator.cpp
+    src/Clocks/Allan.cpp
+    src/Clocks/Calibration.cpp
+)
+set(CLOCK_CSV_SOURCES src/utils/ClockCsvWriter.cpp)
+
 set(BIG_FUNCTIONS_SOURCE_CANDIDATES
+    ${CLOCK_SOURCES}
+    ${CLOCK_CSV_SOURCES}
     src/stations/StationCatalog.cpp
     src/stations/ElevationMask.cpp
     src/RKF45Integrator.cpp
@@ -176,6 +190,8 @@ set(APP_SOURCE_CANDIDATES
     tests/test_voyager_position_od.cpp
     tests/test_optical.cpp
     tests/test_geometric_line_of_sight.cpp
+    tests/test_clocks.cpp
+    tests/test_clock_history.cpp
 
     tests/Optical/test_opnav_geometry.cpp
 )
@@ -191,7 +207,18 @@ foreach(app_src IN LISTS APP_SOURCES)
     get_filename_component(app_name "${app_src}" NAME_WE)
     add_executable(${app_name} "${app_src}")
 
-    if(app_name STREQUAL "test_geometric_line_of_sight")
+    if(app_name STREQUAL "test_clocks" OR app_name STREQUAL "test_clock_history")
+        target_sources(${app_name} PRIVATE ${CLOCK_SOURCES} ${CLOCK_CSV_SOURCES})
+        target_include_directories(${app_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
+        if(app_name STREQUAL "test_clock_history")
+            target_compile_definitions(${app_name} PRIVATE
+                DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            )
+        endif()
+    elseif(app_name STREQUAL "test_geometric_line_of_sight")
         # Keep this geometry-only test independent of CSPICE and the graphics
         # stack. The implementation remains part of big_functions above.
         target_sources(${app_name} PRIVATE
