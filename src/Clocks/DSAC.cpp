@@ -2,6 +2,16 @@
 
 namespace fd::clocks {
 
+DSAC DSAC::dayMatchedWhiteFmBaseline() {
+    // Tjoelker (2021), slide 21: 3e-15 one-day ADEV.
+    // Burt et al. (2021), doi:10.1038/s41586-021-03571-7: 3e-16/day drift.
+    // The q_b conversion is an effective white-FM approximation, not a fit.
+    constexpr double secondsPerDay = 86400.0;
+    constexpr double dayAdev = 3.0e-15;
+    return DSAC({3.0e-16 / secondsPerDay, dayAdev * dayAdev * secondsPerDay, 0.0},
+                "DSAC_day_matched_white_FM_baseline");
+}
+
 DSAC DSAC::fromParameters(ClockParameters p) { return DSAC(p); }
 DSAC DSAC::fromAllanData(std::span<const AllanDatum> d, const AllanFitAssumptions& a) {
     return fromParameters(fitClockAllanData(d, a));

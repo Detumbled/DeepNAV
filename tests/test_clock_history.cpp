@@ -8,10 +8,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 using namespace fd::clocks;
 using fd::utils::writeClockCsv;
@@ -22,6 +24,14 @@ namespace {
 // Change this folder name to customize the default CSV destination.
 const std::filesystem::path defaultOutputDirectory =
     std::filesystem::path(DEEPNAV_SOURCE_DIR) / "Output clocks";
+
+// =========================== DEMO SETUP ===========================
+constexpr double durationDays = 20.0;
+constexpr double timeStepSeconds = 1.0;
+constexpr double rangeThresholdMeters = 1.0; // Chosen clock-only allocation.
+constexpr std::size_t displayStride = 1;
+constexpr std::uint64_t localSeed = 42, dsacSeed = 43;
+// ================================================================
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -183,25 +193,61 @@ void exportDeterministicMean(const Clocks& clock, ClockState state,
 }
 
 void exportPlotFixtures(const std::filesystem::path& directory) {
-    // Synthetic values and seeds are explicitly retained here, not inferred from filenames.
-    auto local = LocalOscillator::fromParameters({2e-15, 1e-24, 3e-26});
-    auto dsac = DSAC::fromParameters({1e-17, 1e-26, 3e-30});
-    constexpr std::size_t steps = 360, stride = 6;
-    constexpr double dt = 240; // Same 24-hour arc and sampling for both clocks.
-    const ClockState localInitial{2e-9, 1e-11}, dsacInitial{1e-9, 3e-15};
-    local.enableHistory(ClockHistory::requiredCapacity(steps, stride), true);
-    dsac.enableHistory(ClockHistory::requiredCapacity(steps, stride), true);
-    ClockTruthSimulator a(local, 42), b(dsac, 43);
-    (void)a.run(steps, dt, localInitial, stride, ClockCovariance::Zero());
-    (void)b.run(steps, dt, dsacInitial, stride, ClockCovariance::Zero());
-    writeClockCsv(directory / "local.csv", *local.history(), ClockCsvWriteMode::Overwrite);
-    writeClockCsv(directory / "dsac.csv", *dsac.history(), ClockCsvWriteMode::Overwrite);
+    auto local = LocalOscillator::representativeUsoWhiteFmWithAging();
+    auto dsac = DSAC::dayMatchedWhiteFmBaseline();
+    const double durationSeconds = durationDays * 86400.0;
+    const double requestedSteps = durationSeconds / timeStepSeconds;
+    if (!std::isfinite(durationSeconds) || durationSeconds <= 0 || !std::isfinite(timeStepSeconds)
+        || timeStepSeconds <= 0 || !std::isfinite(requestedSteps)
+        || requestedSteps >= static_cast<double>(std::numeric_limits<std::size_t>::max())
+        || std::abs(requestedSteps - std::round(requestedSteps)) > 1e-9
+        || displayStride == 0 || !std::isfinite(rangeThresholdMeters) || rangeThresholdMeters <= 0)
+        throw std::invalid_argument("Demo setup requires positive duration/dt/threshold, integral steps and stride >= 1.");
+    const std::size_t steps = static_cast<std::size_t>(std::round(requestedSteps)), stride = displayStride;
+    const double dt = timeStepSeconds;
+    // Ideal initial bias/frequency calibration. Customize residual state and
+    // P0 here independently of the oscillator's diffusion intensities.
+    const ClockState localInitial{}, dsacInitial{};
+    const ClockCovariance localP0 = ClockCovariance::Zero();
+    const ClockCovariance dsacP0 = ClockCovariance::Zero();
+    // Keep every step for Allan; display CSVs are selected from the same truth.
+    local.enableHistory(ClockHistory::requiredCapacity(steps, 1), true);
+    dsac.enableHistory(ClockHistory::requiredCapacity(steps, 1), true);
+    ClockTruthSimulator a(local, localSeed), b(dsac, dsacSeed);
+    (void)a.run(steps, dt, localInitial, 1, localP0);
+    (void)b.run(steps, dt, dsacInitial, 1, dsacP0);
+    writeClockCsv(directory / "local_allan.csv", *local.history(), ClockCsvWriteMode::Overwrite);
+    writeClockCsv(directory / "dsac_allan.csv", *dsac.history(), ClockCsvWriteMode::Overwrite);
+    for (const auto& entry : {std::pair<const Clocks*, const char*>{&local, "local.csv"},
+                              std::pair<const Clocks*, const char*>{&dsac, "dsac.csv"}}) {
+        auto display = LocalOscillator::fromParameters(entry.first->parameters());
+        display.enableHistory(ClockHistory::requiredCapacity(steps, stride), true);
+        const auto& samples = entry.first->history()->samples();
+        for (std::size_t i = 0; i < samples.size(); ++i)
+            if (i % stride == 0 || i + 1 == samples.size()) display.recordSample(samples[i]);
+        writeClockCsv(directory / entry.second, *display.history(), ClockCsvWriteMode::Overwrite);
+    }
     exportDeterministicMean(local, localInitial, directory / "local_mean.csv", steps, dt, stride);
     exportDeterministicMean(dsac, dsacInitial, directory / "dsac_mean.csv", steps, dt, stride);
-    std::cout << "Synthetic configurations (not hardware specifications):\n"
-              << "  local: b0=2e-9 s, y0=1e-11, D=2e-15 /s, q_b=1e-24 s, q_y=3e-26 /s, seed=42\n"
-              << "  DSAC: b0=1e-9 s, y0=3e-15, D=1e-17 /s, q_b=1e-26 s, q_y=3e-30 /s, seed=43\n"
-              << "  Both: P0=0, dt=240 s, duration=86400 s, recording stride=6\n";
+    std::cout << std::setprecision(std::numeric_limits<double>::max_digits10)
+              << "Isolated clock-only comparison: ideal ground clock; no measurement noise.\n"
+              << "  " << local.configurationName() << ": D=" << local.parameters().frequency_drift_per_s
+              << " /s, q_b=" << local.parameters().q_bias_s << " s, q_y=0 /s, seed=" << localSeed
+              << "; aging plus simplified white FM, not a full device spectrum fit.\n"
+              << "  " << dsac.configurationName() << ": D=" << dsac.parameters().frequency_drift_per_s
+              << " /s, q_b=" << dsac.parameters().q_bias_s
+              << " s, q_y=0 /s, seed=" << dsacSeed << "; effective approximation, not a fitted DSAC hardware model.\n"
+              << "  local initial: b0=" << localInitial.bias_s << " s, y0=" << localInitial.fractional_frequency
+              << "; P0=[" << localP0(0,0) << ',' << localP0(0,1) << ';' << localP0(1,0) << ',' << localP0(1,1) << "]\n"
+              << "  DSAC initial: b0=" << dsacInitial.bias_s << " s, y0=" << dsacInitial.fractional_frequency
+              << "; P0=[" << dsacP0(0,0) << ',' << dsacP0(0,1) << ';' << dsacP0(1,0) << ',' << dsacP0(1,1) << "]\n"
+              << "  Sampling: dt=" << dt << " s, duration=" << steps * dt
+              << " s, display stride=" << stride << ", Allan stride=1\n"
+              << "  Allocation: " << rangeThresholdMeters << " m of clock-only range error, not a navigation requirement.\n"
+              << "  Ideal initial calibration; ideal ground reference; constant aging uncompensated; simplified white FM; flicker/other long-term noise omitted.\n"
+              << "  Simplified holdover comparison; sampled crossings are not mandatory ground-contact intervals.\n"
+              << "  Sources: https://doi.org/10.1029/2025RS008244; https://doi.org/10.1038/s41586-021-03571-7\n"
+              << "  One-day ADEV reference: Tjoelker (2021), DSAC results, slide 21.\n";
 }
 
 } // namespace
@@ -222,7 +268,7 @@ int main(int argc, char** argv) {
         std::filesystem::remove_all(scratch);
         std::filesystem::create_directories(directory);
         exportPlotFixtures(directory);
-        std::cout << "Saved synthetic clock CSVs to " << std::filesystem::absolute(directory) << '\n';
+        std::cout << "Saved reference-model clock CSVs to " << std::filesystem::absolute(directory) << '\n';
         return 0;
     } catch (const std::exception& e) {
         std::error_code cleanupError;

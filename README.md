@@ -271,9 +271,61 @@ uses variance, requires explicit drift removal (or zero drift), a declared
 valid tau interval and a noise assumption, and rejects negative coefficients,
 ill-conditioned data and excessive residuals. One Allan point is accepted only
 with a single dominant noise assumption. The default maximum relative variance
-residual is 5%, configurable by the caller. All DSAC configurations are custom;
-no published hardware preset is supplied. Allan data do not determine initial
+residual is 5%, configurable by the caller. `fromParameters` and `fromAllanData`
+produce custom configurations. `DSAC::dayMatchedWhiteFmBaseline()` adds the
+named effective baseline described below; it is not a fitted hardware model.
+Allan data do not determine initial
 bias, fractional frequency, their covariance, or the removed drift.
+
+The diffusion convention is
+`db = y*dt + sqrt(q_b)*dW_b`, `dy = D*dt + sqrt(q_y)*dW_y`, with independent
+Wiener processes. Diffusion intensities are not one-sided PSD coefficients or
+per-step standard deviations. The existing exact two-state covariance and
+correlated-increment sampler are retained, including singular zero-q_y cases.
+
+`DSAC::dayMatchedWhiteFmBaseline()` identifies its configuration as
+`DSAC_day_matched_white_FM_baseline`, with known drift `D=3e-16/86400 s^-1`,
+white-FM diffusion `q_b=(3e-15)^2*86400=7.776e-25 s`, and `q_y=0`.
+This effective white-frequency approximation matches stochastic Allan deviation
+3e-15 at one day, as reported in
+[Tjoelker (2021), slide 21](https://wsts.atis.org/wp-content/uploads/2021/03/Deep-Space-Atomic-Clock_-A-Technology-Demonstration-Mission.Tjoelker.pdf).
+The drift value is reported by
+[Burt et al. (2021)](https://doi.org/10.1038/s41586-021-03571-7).
+The approximation does not reproduce DSAC's detailed short-term behavior or
+long-term stability floor. It must not be labelled a real/fully fitted DSAC model.
+
+Initial state and covariance remain separate caller inputs. The comparison
+defaults to ideal initial calibration (`b0=y0=0`, `P0=0`) and an ideal ground
+clock, with no measurement noise. `dsacInitial` and `dsacP0` in the demo can be
+changed without changing process noise. At two days this model predicts
+approximately 0.367 ns stochastic bias sigma, 0.330 m of 3-sigma clock-only
+range uncertainty, and 0.0155 m of drift-only range error. These are analytical
+model quantities, not required recalibration intervals from one sample path.
+Tests verify timestep-independent covariance, sqrt(dt) increments, noiseless
+drift evolution, and short-tau Allan behavior. Two days of data cannot validate
+day-scale Allan statistics accurately.
+
+Published local-oscillator comparators from
+[Ely et al. (2025), Table 2](https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2025RS008244):
+
+| Reference | Fractional-frequency ADEV at 1 s | ADEV at 1000 s | Fractional-frequency aging/day |
+|---|---:|---:|---:|
+| Representative OCXO | 5e-13 | 8e-12 | 7e-10 |
+| Representative deep-space USO | 5e-13 | 6e-13 | 1e-10 |
+
+Separately, the [AccuBeat manufacturer page](https://www.accubeat.com/uso)
+claims ADEV below 5e-13 over averaging times 1–1000 s for its USO and describes
+JUICE flight-model delivery. That manufacturer claim is not substituted for
+the review table's representative entries.
+
+`LocalOscillator::representativeUsoWhiteFmWithAging()` is the demo preset:
+`D=1e-10/86400 s^-1`, `q_b=2.5e-25 s`, `q_y=0`, configuration name
+`USO_aging_simplified_white_FM`. The white-FM intensity approximates the review's
+5e-13 ADEV at 1 s only. It does not fit a full device spectrum: at 1000 s,
+retained drift alone gives about 8.18e-13 ADEV, exceeding the review's 6e-13.
+`representativeUsoAgingOnly()` remains available for deterministic comparisons.
+DSAC is matched at one day, so comparing the presets' q_b values alone does not
+rank hardware performance. Aging is fractional-frequency change per day.
 
 ```cpp
 #include "Clocks/Calibration.hpp"
@@ -362,14 +414,20 @@ opening/writing errors and never appends implicitly.
 `plot_clocks.py` is standalone and reads one or more CSV files into separate
 Pandas DataFrames. It rejects invalid schemas, duplicate headers, missing or
 nonfinite numbers, negative sigma and nonincreasing/negative timestamps. It
-creates three separate figures/windows, with an independent vertical scale
-for every clock so the smaller DSAC curve remains visible:
+creates four separate figures/windows. Range, budget and diagnostics use independent
+vertical scales; uncertainty and Allan panels share vertical limits:
 
 - Main figure: signed one-way range error and total pointwise budget
   `c*(abs(mu_bias) + k*sigma_bias_s)` (default k=3).
 - Uncertainty figure: stochastic contribution `k*c*sigma_bias_s`, excluding
-  the deterministic mean.
-- Support figure: bias in ns and fractional frequency.
+  the deterministic mean, on a common linear scale.
+- Support figure: bias in ns and fractional frequency state y. White FM enters
+  bias increments and is excluded from the displayed y state.
+- Allan figure: overlapping fractional-frequency Allan deviation, with one
+  log-log subplot per clock side by side and common vertical limits for comparison.
+  The axes are averaging time tau in seconds and dimensionless sigma_y(tau).
+  SETUP supplies explicit q_b and D for dashed theory curves
+  `sqrt(q_b/tau + 0.5*(D*tau)^2)`; drift is retained.
 
 The total budget requires explicit deterministic mean histories supplied via
 `--mean-csv`, one per input clock, at identical recorded timestamps. Those CSVs
@@ -380,9 +438,9 @@ inputs instead of inventing a budget. This pointwise budget is not Allan
 deviation or a guarantee for an entire sample path.
 
 `--threshold-m` draws signed thresholds for range and positive thresholds for
-budget/uncertainty, annotating the first recorded contact from all input rows
-before display reduction. It reports the preceding sample time too. These are
-sampled contacts; an earlier unobserved crossing between samples can be missed.
+budget/uncertainty, annotating the first sampled threshold crossing from all input rows
+before display reduction. It reports the preceding sample time with sufficient precision. These are
+realization-dependent sampled crossings; an earlier unobserved crossing between samples can be missed.
 
 ```sh
 python3 -m pip install pandas matplotlib
@@ -394,8 +452,23 @@ python3 plot_clocks.py local.csv --max-points 0 --show --output clocks.svg
 The plotter uses a noninteractive backend unless `--show` is supplied. PNG,
 PDF and SVG are supported. `--output clocks.png` saves the main figure there
 and the other figures to `clocks_uncertainty.png` and `clocks_diagnostics.png`.
-With `--show`, all three windows open together. Its default limit of 20000 points per curve preserves
-the endpoints and only affects display; narrow peaks can be missed. Original
+The additional Allan figure is saved as `clocks_allan.png` when full uniformly
+sampled histories are available. The plotter automatically reads sibling
+`local_allan.csv`/`dsac_allan.csv` files produced by the demo, or accepts explicit
+`--allan-csv` paths in the same clock order. It does not silently use the reduced
+display histories for Allan analysis, interpolate nonuniform data, or apply
+`--max-points` to the estimator. The estimator uses second differences of bias
+and integer averaging factors. Drift is retained and labelled; this is not a
+drift-removed noise-only stability curve. Tau is limited to approximately a
+tenth of the record duration; long-tau estimates have few independent averages.
+Zero ADEV cannot be represented on a logarithmic axis and is not replaced by an
+artificial epsilon.
+
+With `--show`, all available windows open together. By default curves display
+at most 10000 representative points. `--max-points 0` plots every sample.
+Simulation/CSV resolution remains one second and image output remains at 180 DPI.
+Display selection preserves endpoints and crossing markers; it can miss narrow peaks.
+ADEV and crossing calculations always precede display thinning. Original
 CSV data are untouched. Reduced histories (especially an extra final sample)
 may be nonuniform and must not automatically be used for Allan estimates or
 first-crossing analysis. Keep simulation parameters and seeds in the run's
@@ -405,28 +478,66 @@ Build the recording checks with
 `cmake --build build-clang --target test_clock_history -j4`. Running
 `build-clang/test_clock_history` automatically creates `Output clocks` in the
 project root and saves `local.csv`, `dsac.csv`, `local_mean.csv`, and
-`dsac_mean.csv` there, replacing previous synthetic outputs. Both realizations
-cover the same 24-hour interval and include covariance. Mean files are exported
+`dsac_mean.csv`, plus full-step `local_allan.csv` and `dsac_allan.csv`, replacing
+previous reference-model outputs. Both realizations cover the same configured interval
+and include covariance. The current demo uses 1728000 steps of 1 second (20 days)
+and a recording stride of 1: 1728001 samples per history. Edit the clearly labelled
+DEMO SETUP constants in `tests/test_clock_history.cpp` to configure duration, step,
+threshold, recording stride and seeds; keep the plotter threshold/model parameters in sync.
+Display and Allan files contain the same realization; no additional random run
+is generated for Allan. Mean files are exported
 separately from deterministic propagation. This destination is independent of the working directory;
 change `defaultOutputDirectory` in `tests/test_clock_history.cpp` to customize it,
 or pass an output directory as a command-line argument. For example:
 
 ```sh
 ./build-clang/test_clock_history
-python3 plot_clocks.py "Output clocks/local.csv" "Output clocks/dsac.csv" \
-  --mean-csv "Output clocks/local_mean.csv" "Output clocks/dsac_mean.csv" \
-  --labels "Local (synthetic)" "DSAC (custom synthetic)" \
-  --threshold-m 1 --output "Output clocks/clocks.png" --show
+python3 plot_clocks.py
 ```
+
+With no arguments, the plotter uses its clearly labelled `SETUP` dictionary near
+the top of `plot_clocks.py`: CSV/mean/Allan filenames, labels, days on the time
+axis, k=3, a 1 m threshold, a 10000-point display limit, explicit theoretical
+model parameters, a two-hour USO range inset, image output and window display.
+The default output directory is `Output clocks` beside the script, independent
+of the current working directory. Edit these settings in one place; set `show`
+to False for saving without opening windows. Explicit command-line arguments
+remain supported and use the normal CLI defaults instead of SETUP.
 
 CSV validation artifacts remain temporary; only simulation CSVs are retained.
 Generated files in `Output clocks` are ignored by Git. Their
 parameters and seeds are defined in `tests/test_clock_history.cpp` and printed
 at execution, including initial conditions, drift, noise intensities, P0 and
-sampling. The coefficients remain synthetic validation values; the mathematical
-Allan checks do not establish OCXO/DSAC hardware performance or ESA suitability.
+sampling, and the ideal ground-clock assumption. The default comparison uses
+the named DSAC effective white-FM baseline and USO aging plus simplified white FM;
+the other numerical tests retain synthetic validation coefficients. Plot labels
+distinguish these approximations. Mathematical Allan checks do not establish
+complete OCXO/DSAC hardware performance or ESA suitability.
 Python tests
 also exercise C++ exports when that executable is available.
+
+The result is a simplified clock holdover comparison. Figure footnotes state ideal
+initial bias/frequency calibration (`b0=y0=0`, `P0=0`), ideal ground reference,
+constant uncompensated aging, simplified white FM, and omitted flicker/other
+long-term noise. The illustrative 1 m clock-only allocation is not a universal
+navigation requirement. Clocks are never reset at crossings; these do not impose
+ground-contact intervals or represent first-passage probabilities.
+
+| Days | DSAC deterministic range [m] | DSAC stochastic 3 sigma [m] | Total budget [m] |
+|---|---:|---:|---:|
+| 2 | 0.01554 | 0.32968 | 0.34522 |
+| 10 | 0.38853 | 0.73719 | 1.12572 |
+| 20 | 1.55412 | 1.04254 | 2.59666 |
+
+For ideal initial conditions, the analytical DSAC budget reaches 1 m at
+8.87027 days; its stochastic-only envelope reaches it later. The plot labels
+analytical budget crossings separately from sampled realization/envelope crossings.
+At 20 days USO deterministic range is about 518041 m and stochastic 3 sigma
+about 0.591 m. Its deterministic-only 1 m crossing is approximately 2400.83 s;
+the actual noisy sampled crossing can differ. Extending the run does not validate
+hardware over 20 days; plotted Allan tau is at most two days for this run.
+Allan analysis follows the bias-second-difference definition in
+[NIST SP 1065](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication1065.pdf).
 
 ### Optical Navigation
 

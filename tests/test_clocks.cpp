@@ -108,6 +108,95 @@ void allanFactories() {
     std::cout << "PASS: Allan factories, dominant-noise conversion and incompatible/ambiguous fit rejection\n";
 }
 
+void referenceBaselines() {
+    const auto clock = DSAC::dayMatchedWhiteFmBaseline();
+    const auto& p = clock.parameters();
+    require(clock.configurationName() == "DSAC_day_matched_white_FM_baseline", "Wrong baseline name");
+    require(DSAC::fromParameters(p).configurationName() == "DSAC_custom",
+        "Custom parameters must not implicitly claim a named baseline");
+    near(p.frequency_drift_per_s, 3e-16 / 86400.0);
+    near(p.q_bias_s, 7.776e-25);
+    near(p.q_frequency_per_s, 0);
+    near(theoreticalAllanDeviation(86400, p), 3e-15);
+    const auto local = LocalOscillator::representativeUsoAgingOnly();
+    near(local.parameters().frequency_drift_per_s, 1e-10 / 86400.0);
+    near(local.parameters().q_bias_s, 0);
+    near(local.parameters().q_frequency_per_s, 0);
+    require(local.configurationName() == "USO_representative_aging_only", "Wrong USO reference name");
+
+    const auto uso = LocalOscillator::representativeUsoWhiteFmWithAging();
+    require(uso.configurationName() == "USO_aging_simplified_white_FM", "Wrong noisy USO name");
+    near(uso.parameters().q_bias_s, 2.5e-25);
+    near(uso.parameters().q_frequency_per_s, 0);
+    near(uso.parameters().frequency_drift_per_s, 1e-10 / 86400.0);
+    const auto uso_covariance = propagateClockCovariance(uso, ClockCovariance::Zero(), 20*86400);
+    near(uso_covariance(0,0), 2.5e-25 * 20*86400);
+    near(3 * clockSpeedOfLightMPerS * std::sqrt(uso_covariance(0,0)), 0.5911311305394723, 1e-10);
+    near(clockSpeedOfLightMPerS * uso.propagate({}, 20*86400).bias_s, 518041.367424, 1e-10);
+    for (const auto& row : {std::array<double,4>{2, 0.01554, 0.32968, 0.34522},
+                           std::array<double,4>{10, 0.38853, 0.73719, 1.12572},
+                           std::array<double,4>{20, 1.55412, 1.04254, 2.59666}}) {
+        const double time = row[0]*86400;
+        const double mean = clockSpeedOfLightMPerS * clock.propagate({}, time).bias_s;
+        const double stochastic = 3*clockSpeedOfLightMPerS * std::sqrt(p.q_bias_s*time);
+        require(std::abs(mean-row[1]) < 1e-5, "Incorrect DSAC drift contribution");
+        require(std::abs(stochastic-row[2]) < 1e-5, "Incorrect DSAC stochastic contribution");
+        require(std::abs(mean+stochastic-row[3]) < 1e-5, "Incorrect DSAC total budget");
+    }
+    constexpr double duration = 2 * 86400.0;
+    for (double dt : {1.0, 60.0, 240.0, 86400.0}) {
+        ClockCovariance covariance = ClockCovariance::Zero();
+        for (int i = 0; i < static_cast<int>(duration / dt); ++i)
+            covariance = propagateClockCovariance(clock, covariance, dt);
+        near(covariance(0, 0), p.q_bias_s * duration, 1e-10);
+        near(covariance(0, 1), 0);
+        near(covariance(1, 1), 0);
+        near(clock.processNoise(dt)(0, 0), p.q_bias_s * dt);
+    }
+    const double sigma = std::sqrt(p.q_bias_s * duration);
+    near(sigma * 1e9, 0.367, 0.002);
+    near(3 * clockSpeedOfLightMPerS * sigma, 0.330, 0.002);
+    near(clockSpeedOfLightMPerS * clock.propagate({}, duration).bias_s, 0.0155, 0.003);
+
+    const auto noise_free = DSAC::fromParameters({p.frequency_drift_per_s, 0, 0});
+    ClockTruthSimulator noiseless(noise_free, 43);
+    ClockState state{5e-9, 1e-12};
+    for (int i = 0; i < 1000; ++i) state = noiseless.step(state, 7);
+    constexpr double t = 7000;
+    near(state.bias_s, 5e-9 + 1e-12*t + 0.5*p.frequency_drift_per_s*t*t);
+    near(state.fractional_frequency, 1e-12 + p.frequency_drift_per_s*t);
+
+    // Same seed gives the same standard normal at the first step. The white-FM
+    // increment must scale as sqrt(dt), while y remains fully deterministic.
+    ClockTruthSimulator reference(clock, 43);
+    const double reference_noise = reference.step({}, 1).bias_s - clock.propagate({}, 1).bias_s;
+    for (double dt : {4.0, 100.0, 86400.0}) {
+        ClockTruthSimulator scaled(clock, 43);
+        const auto draw = scaled.step({}, dt);
+        const auto expected = clock.propagate({}, dt);
+        near((draw.bias_s - expected.bias_s) / std::sqrt(dt), reference_noise, 1e-12);
+        near(draw.fractional_frequency, expected.fractional_frequency);
+    }
+    ClockCovariance initial = ClockCovariance::Zero();
+    initial(0, 0) = 4e-20;
+    initial(1, 1) = 1e-30;
+    const auto propagated = propagateClockCovariance(clock, initial, 100);
+    near(propagated(0, 0), 4e-20 + 1e-26 + p.q_bias_s * 100);
+
+    // A single long realization checks short tau only. It cannot validate
+    // hardware day-scale ADEV from a two-day recording.
+    ClockTruthSimulator truth(clock, 44);
+    std::vector<double> bias(131073);
+    ClockState current;
+    for (std::size_t i = 1; i < bias.size(); ++i) {
+        current = truth.step(current, 1);
+        bias[i] = current.bias_s;
+    }
+    for (std::size_t m : {1, 4, 16, 64, 256})
+        near(overlappingAllanDeviation(bias, 1, m) / std::sqrt(p.q_bias_s / m), 1, 0.20);
+    std::cout << "PASS: named DSAC/USO baselines, two-day budget, step independence, sqrt(dt) noise and short-tau Allan\n";
+}
+
 void simulation() {
     // Synthetic coefficients only. Verify each noise source, including singular Q.
     for (const auto p : {ClockParameters{}, ClockParameters{0, 4e-24, 0},
@@ -236,11 +325,12 @@ int main() {
     try {
         deterministicAndCovariance();
         allanFactories();
+        referenceBaselines();
         simulation();
         allanStatistics();
         calibration();
         validation();
-        std::cout << "All clock tests passed (synthetic coefficients only).\n";
+        std::cout << "All clock tests passed (synthetic tests and documented effective baselines).\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "FAIL: " << e.what() << '\n';
