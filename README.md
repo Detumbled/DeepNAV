@@ -272,8 +272,8 @@ valid tau interval and a noise assumption, and rejects negative coefficients,
 ill-conditioned data and excessive residuals. One Allan point is accepted only
 with a single dominant noise assumption. The default maximum relative variance
 residual is 5%, configurable by the caller. `fromParameters` and `fromAllanData`
-produce custom configurations. `DSAC::dayMatchedWhiteFmBaseline()` adds the
-named effective baseline described below; it is not a fitted hardware model.
+produce custom configurations. `DSAC::shortTermWhiteFmBaseline()` adds the
+named DSAC-inspired baseline described below; it is not a fitted hardware model.
 Allan data do not determine initial
 bias, fractional frequency, their covariance, or the removed drift.
 
@@ -283,27 +283,31 @@ Wiener processes. Diffusion intensities are not one-sided PSD coefficients or
 per-step standard deviations. The existing exact two-state covariance and
 correlated-increment sampler are retained, including singular zero-q_y cases.
 
-`DSAC::dayMatchedWhiteFmBaseline()` identifies its configuration as
-`DSAC_day_matched_white_FM_baseline`, with known drift `D=3e-16/86400 s^-1`,
-white-FM diffusion `q_b=(3e-15)^2*86400=7.776e-25 s`, and `q_y=0`.
-This effective white-frequency approximation matches stochastic Allan deviation
-3e-15 at one day, as reported in
-[Tjoelker (2021), slide 21](https://wsts.atis.org/wp-content/uploads/2021/03/Deep-Space-Atomic-Clock_-A-Technology-Demonstration-Mission.Tjoelker.pdf).
-The drift value is reported by
-[Burt et al. (2021)](https://doi.org/10.1038/s41586-021-03571-7).
-The approximation does not reproduce DSAC's detailed short-term behavior or
-long-term stability floor. It must not be labelled a real/fully fitted DSAC model.
+`DSAC::shortTermWhiteFmBaseline()` identifies its configuration as
+`DSAC_inspired_short_term_white_FM`, with deterministic drift
+`D=3e-16/86400 s^-1`, white-FM diffusion `q_b=2.25e-26 s`, and `q_y=0`.
+[Burt et al. (2021)](https://doi.org/10.1038/s41586-021-03571-7), abstract,
+report the ground-test short-term law
+`sigma_A(tau)=1.5e-13/sqrt(tau/(1 s))`. With time in seconds,
+`q_b=tau*sigma_A(tau)^2=(1.5e-13)^2*1 s=2.25e-26 s`.
+This identifies a white-FM regime rather than inferring it from a single one-day
+value. The drift coefficient comes separately from the reported flight drift.
+Combining this ground-test noise law and flight drift defines an illustrative
+DSAC-inspired preset, not a fit to a complete device operating condition.
+The 20-day white-FM continuation is an illustrative extrapolation and does not
+reproduce measured long-term behaviour or a stability floor; flicker is omitted.
+The old `DSAC::dayMatchedWhiteFmBaseline()` remains available for explicit legacy
+comparisons (`q_b=7.776e-25 s`), but is not used by the demo or plotter SETUP.
 
 Initial state and covariance remain separate caller inputs. The comparison
 defaults to ideal initial calibration (`b0=y0=0`, `P0=0`) and an ideal ground
-clock, with no measurement noise. `dsacInitial` and `dsacP0` in the demo can be
-changed without changing process noise. At two days this model predicts
-approximately 0.367 ns stochastic bias sigma, 0.330 m of 3-sigma clock-only
-range uncertainty, and 0.0155 m of drift-only range error. These are analytical
-model quantities, not required recalibration intervals from one sample path.
-Tests verify timestep-independent covariance, sqrt(dt) increments, noiseless
-drift evolution, and short-tau Allan behavior. Two days of data cannot validate
-day-scale Allan statistics accurately.
+clock, with no measurement noise. `localInitial`/`dsacInitial` and
+`localP0`/`dsacP0` in the demo can be changed without changing process noise.
+At two days this preset predicts approximately 0.062354 ns stochastic bias sigma,
+0.056080 m of 3-sigma clock-only range uncertainty, and 0.015541 m of drift-only
+range error. These are analytical model quantities, not required recalibration
+intervals. Tests verify timestep-independent covariance, sqrt(dt) increments,
+noiseless drift evolution, and empirical short-tau ADEV versus the ground-test law.
 
 Published local-oscillator comparators from
 [Ely et al. (2025), Table 2](https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2025RS008244):
@@ -320,12 +324,17 @@ the review table's representative entries.
 
 `LocalOscillator::representativeUsoWhiteFmWithAging()` is the demo preset:
 `D=1e-10/86400 s^-1`, `q_b=2.5e-25 s`, `q_y=0`, configuration name
-`USO_aging_simplified_white_FM`. The white-FM intensity approximates the review's
-5e-13 ADEV at 1 s only. It does not fit a full device spectrum: at 1000 s,
+`USO_aging_simplified_white_FM`. It is labelled **representative USO-like preset**:
+5e-13 ADEV at 1 s is an illustrative assumption, informed by the review rather
+than measured for a particular oscillator. It does not fit a full device spectrum: at 1000 s,
 retained drift alone gives about 8.18e-13 ADEV, exceeding the review's 6e-13.
 `representativeUsoAgingOnly()` remains available for deterministic comparisons.
-DSAC is matched at one day, so comparing the presets' q_b values alone does not
-rank hardware performance. Aging is fractional-frequency change per day.
+For zero initial covariance, DSAC-inspired stochastic range uncertainty is
+`sqrt(2.25e-26/2.5e-25)=0.30` times the USO-like uncertainty at every positive
+elapsed time. With equal nonzero initial covariance, this ratio applies to the
+white-FM process-noise contributions, not necessarily the total uncertainty.
+These illustrative presets do not rank real hardware. Aging is
+fractional-frequency change per day.
 
 ```cpp
 #include "Clocks/Calibration.hpp"
@@ -509,7 +518,7 @@ Generated files in `Output clocks` are ignored by Git. Their
 parameters and seeds are defined in `tests/test_clock_history.cpp` and printed
 at execution, including initial conditions, drift, noise intensities, P0 and
 sampling, and the ideal ground-clock assumption. The default comparison uses
-the named DSAC effective white-FM baseline and USO aging plus simplified white FM;
+the DSAC-inspired short-term white-FM baseline and representative USO-like preset;
 the other numerical tests retain synthetic validation coefficients. Plot labels
 distinguish these approximations. Mathematical Allan checks do not establish
 complete OCXO/DSAC hardware performance or ESA suitability.
@@ -525,17 +534,27 @@ ground-contact intervals or represent first-passage probabilities.
 
 | Days | DSAC deterministic range [m] | DSAC stochastic 3 sigma [m] | Total budget [m] |
 |---|---:|---:|---:|
-| 2 | 0.01554 | 0.32968 | 0.34522 |
-| 10 | 0.38853 | 0.73719 | 1.12572 |
-| 20 | 1.55412 | 1.04254 | 2.59666 |
+| 2 | 0.01554 | 0.05608 | 0.07162 |
+| 10 | 0.38853 | 0.12540 | 0.51393 |
+| 20 | 1.55412 | 0.17734 | 1.73146 |
 
 For ideal initial conditions, the analytical DSAC budget reaches 1 m at
-8.87027 days; its stochastic-only envelope reaches it later. The plot labels
+14.77008 days; its stochastic-only envelope stays below 1 m over the 20-day run. The plot labels
 analytical budget crossings separately from sampled realization/envelope crossings.
 At 20 days USO deterministic range is about 518041 m and stochastic 3 sigma
 about 0.591 m. Its deterministic-only 1 m crossing is approximately 2400.83 s;
 the actual noisy sampled crossing can differ. Extending the run does not validate
 hardware over 20 days; plotted Allan tau is at most two days for this run.
+Slide caption:
+
+> Illustrative one-way ranging clock budget: USO-like and DSAC-inspired models
+> with white frequency noise, initial calibration uncertainty, and deterministic
+> aging. Flicker noise is omitted; long-term stochastic behaviour is extrapolated.
+
+The default demo has zero initial calibration covariance; nonzero initial
+uncertainty is propagated separately when supplied. This qualifier is shown
+in figure footnotes so the caption does not imply a nonzero calibration error.
+
 Allan analysis follows the bias-second-difference definition in
 [NIST SP 1065](https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication1065.pdf).
 

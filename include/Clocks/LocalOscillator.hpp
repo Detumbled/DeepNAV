@@ -13,8 +13,8 @@ public:
     // Ely et al. (2025), Table 2: representative USO aging 1e-10/day.
     // Deterministic comparison only: no random noise fit or hardware prediction.
     [[nodiscard]] static LocalOscillator representativeUsoAgingOnly();
-    // Effective white FM matched to representative ADEV 5e-13 at 1 s, plus
-    // uncompensated aging 1e-10/day. Not a full stochastic hardware fit.
+    // Representative USO-like illustrative white FM: ADEV 5e-13 at 1 s,
+    // plus uncompensated aging 1e-10/day. Not a particular device noise fit.
     [[nodiscard]] static LocalOscillator representativeUsoWhiteFmWithAging();
     [[nodiscard]] static LocalOscillator fromParameters(ClockParameters parameters);
     [[nodiscard]] static LocalOscillator fromAllanData(

@@ -256,16 +256,20 @@ class ClockPlots(unittest.TestCase):
     def test_white_fm_aging_theory_and_budget(self):
         import pandas as pd
         t = np.arange(131073, dtype=float)
-        for qb, drift in ((2.5e-25, 1e-10/86400), (7.776e-25, 3e-16/86400)):
+        for qb, drift in ((2.5e-25, 1e-10/86400), (2.25e-26, 3e-16/86400)):
             rng = np.random.default_rng(123)
             bias = np.r_[0, np.cumsum(np.sqrt(qb)*rng.standard_normal(len(t)-1))] + 0.5*drift*t*t
             tau, adev = plotter.overlapping_allan_curve(pd.DataFrame({"time_s": t, "bias_s": bias}))
             short = tau <= 256
             np.testing.assert_allclose(adev[short] / plotter.white_fm_adev(tau[short], qb, drift), 1, rtol=0.2)
-        crossing = plotter.analytical_budget_crossing(1, 7.776e-25, 3e-16/86400) / 86400
-        self.assertAlmostEqual(crossing, 8.87027, places=5)
-        stochastic = plotter.analytical_budget_crossing(1, 7.776e-25, 0) / 86400
+        crossing = plotter.analytical_budget_crossing(1, 2.25e-26, 3e-16/86400) / 86400
+        self.assertAlmostEqual(crossing, 14.77008, places=5)
+        stochastic = plotter.analytical_budget_crossing(1, 2.25e-26, 0) / 86400
         self.assertGreater(stochastic, crossing)
+        self.assertGreater(stochastic, 20)
+        self.assertAlmostEqual(np.sqrt(2.25e-26 / 2.5e-25), 0.30)
+        np.testing.assert_allclose(plotter.white_fm_adev(np.array([1, 10, 1000]), 2.25e-26, 0),
+                                   1.5e-13 / np.sqrt([1, 10, 1000]))
         self.assertIsNone(plotter.analytical_budget_crossing(1, 0, 0))
         self.assertAlmostEqual(plotter.analytical_budget_crossing(1, 0, 1e-10/86400), 2400.83, places=2)
 
@@ -287,17 +291,19 @@ class ClockPlots(unittest.TestCase):
         plotter.overlapping_allan_curve(full_local)
         self.assertIn("sigma_bias_s", local)
         self.assertIn("sigma_bias_s", dsac)
+        np.testing.assert_allclose(dsac["sigma_bias_s"].iloc[1:].to_numpy() /
+                                   local["sigma_bias_s"].iloc[1:].to_numpy(), 0.30, rtol=1e-10)
         np.testing.assert_array_equal(local["time_s"], dsac["time_s"])
         local_mean = plotter.load_clock_csv(self.directory / "local_mean.csv")
         t = local_mean["time_s"]
         np.testing.assert_allclose(local_mean["bias_s"], 0.5*(1e-10/86400)*t*t)
         np.testing.assert_allclose(local["sigma_bias_s"], np.sqrt(2.5e-25 * local["time_s"]), rtol=1e-10)
-        np.testing.assert_allclose(dsac["sigma_bias_s"], np.sqrt(7.776e-25 * dsac["time_s"]), rtol=1e-10)
+        np.testing.assert_allclose(dsac["sigma_bias_s"], np.sqrt(2.25e-26 * dsac["time_s"]), rtol=1e-10)
         np.testing.assert_allclose(dsac["fractional_frequency"], (3e-16 / 86400) * dsac["time_s"], rtol=1e-10)
         dsac_mean = plotter.load_clock_csv(self.directory / "dsac_mean.csv")
         np.testing.assert_allclose(dsac_mean["bias_s"], 0.5 * (3e-16 / 86400) * t*t, rtol=1e-10)
         result = plotter.main([str(self.directory / "local.csv"), str(self.directory / "dsac.csv"),
-                               "--labels", "USO (aging + white FM)", "DSAC (day-matched white FM)",
+                               "--labels", "Representative USO-like preset", "DSAC-inspired (short-term white FM)",
                                "--mean-csv", str(self.directory / "local_mean.csv"), str(self.directory / "dsac_mean.csv"),
                                "--max-points", "12", "--output", str(self.directory / "comparison.png")])
         self.assertEqual(result, 0)

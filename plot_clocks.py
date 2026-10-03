@@ -32,12 +32,15 @@ SETUP = {
     "csv_files": ["local.csv", "dsac.csv"],
     "mean_csv": ["local_mean.csv", "dsac_mean.csv"],  # None disables total budget.
     "allan_csv": ["local_allan.csv", "dsac_allan.csv"],  # None uses auto-discovery.
-    "labels": ["USO (aging + white FM)", "DSAC (day-matched white FM)"],
+    "labels": ["Representative USO-like preset", "DSAC-inspired (short-term white FM)"],
     "time_unit": "days",  # "seconds", "hours", or "days"; Allan tau stays in s.
     "k": 3.0,
     "threshold_m": 1.0,  # None hides the range threshold.
     "max_points": 10000,  # Display only; analysis always uses complete histories.
-    "q_bias_s": [2.5e-25, 7.776e-25],
+    "q_bias_s": [2.5e-25, 2.25e-26],
+    # USO-like 5e-13 at 1 s is illustrative. DSAC ground-test law: Burt et al.
+    # https://doi.org/10.1038/s41586-021-03571-7 ; tau measured in seconds.
+    # Continuing white FM over 20 days does not reproduce long-term hardware noise.
     "drift_per_s": [1e-10 / 86400, 3e-16 / 86400],
     "uso_inset_index": 0,  # None disables the first-two-hours range inset.
     "output": "clocks.png",  # PNG, PDF or SVG; other figures add suffixes.
@@ -212,8 +215,15 @@ def plot_histories(frames, labels, output, time_unit="hours", k=3.0,
     if uso_inset_index is not None and not 0 <= uso_inset_index < len(frames):
         raise ValueError("USO inset index must identify an input clock")
     horizon = max(float(frame["time_s"].iloc[-1]) for frame in frames)
-    assumptions = ("Ideal initial bias/frequency calibration and ground reference; constant aging uncompensated; simplified white FM.\n"
-                   "Flicker/other long-term noise omitted; simplified holdover comparison, not hardware validation.") if q_bias_s is not None else ""
+    initial_covariance_present = any("sigma_bias_s" in frame and
+                                    (frame["sigma_bias_s"].iloc[0] != 0 or
+                                     frame["sigma_fractional_frequency"].iloc[0] != 0)
+                                    for frame in frames)
+    initial_note = ("Initial calibration covariance propagated separately from process noise."
+                    if initial_covariance_present else "Demo initial calibration covariance P0 = 0; ground reference ideal.")
+    assumptions = ("Illustrative one-way ranging clock budget: USO-like and DSAC-inspired models with white frequency noise,\n"
+                   "initial calibration uncertainty, and deterministic aging. Flicker noise is omitted; long-term stochastic behaviour is extrapolated.\n"
+                   + initial_note + " Constant aging left uncompensated.") if q_bias_s is not None else ""
     scale, unit = {"seconds": (1.0, "s"), "hours": (3600.0, "h"),
                    "days": (86400.0, "days")}[time_unit]
     output = Path(output)
@@ -275,7 +285,7 @@ def plot_histories(frames, labels, output, time_unit="hours", k=3.0,
                     raise ValueError(f"{label}: derived plotting quantities overflow")
             draw(main_axes[0, column], frame, range_error, label,
                  "Signed one-way range error [m]", color, signed_threshold=True)
-            main_axes[0, column].set_title(label + " — independent scale")
+            main_axes[0, column].set_title(label + " — independent scale", fontsize=11)
             if budget is not None:
                 draw(main_axes[1, column], frame, budget, label,
                      f"Total budget c (|mean bias| + {k:g} sigma) [m]", color)
@@ -290,7 +300,7 @@ def plot_histories(frames, labels, output, time_unit="hours", k=3.0,
             else:
                 sigma_axes[0, column].text(0.5, 0.5, "No covariance supplied", ha="center", va="center",
                                           transform=sigma_axes[0, column].transAxes)
-            sigma_axes[0, column].set_title(label + " — excludes deterministic bias")
+            sigma_axes[0, column].set_title(label + " — excludes deterministic bias", fontsize=10)
             # Diagnostics deliberately have no range thresholds.
             shown = display_frame(frame, max_points)
             for row, (values, ylabel) in enumerate(((bias_ns, "Clock bias [ns]"),
@@ -300,7 +310,7 @@ def plot_histories(frames, labels, output, time_unit="hours", k=3.0,
                 ax.set(xlabel=f"Elapsed time since calibration [{unit}]", ylabel=ylabel, xlim=(0, horizon / scale))
                 ax.grid(True, alpha=0.25)
                 ax.legend(loc="best")
-            diagnostic_axes[0, column].set_title(label + " — independent scale")
+            diagnostic_axes[0, column].set_title(label + " — independent scale", fontsize=11)
             diagnostic_axes[1, column].set_title("Fractional frequency state — white FM excluded", fontsize=11)
             if budget is not None and q_bias_s is not None and threshold_m is not None:
                 # The closed form applies only to these explicitly checked ideal initial conditions.
@@ -316,7 +326,7 @@ def plot_histories(frames, labels, output, time_unit="hours", k=3.0,
                     main_axes[1, column].text(0.02, 0.74, text, transform=main_axes[1, column].transAxes,
                         fontsize=9, bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "0.8"})
             if column == uso_inset_index:
-                inset = main_axes[0, column].inset_axes([0.48, 0.32, 0.49, 0.37])
+                inset = main_axes[0, column].inset_axes([0.48, 0.36, 0.49, 0.34])
                 early = frame[frame["time_s"] <= 7200]
                 selected = display_frame(early, max_points)
                 inset.plot(selected["time_s"] / 3600, C * selected["bias_s"], color=color)

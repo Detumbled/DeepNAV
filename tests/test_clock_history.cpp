@@ -194,7 +194,7 @@ void exportDeterministicMean(const Clocks& clock, ClockState state,
 
 void exportPlotFixtures(const std::filesystem::path& directory) {
     auto local = LocalOscillator::representativeUsoWhiteFmWithAging();
-    auto dsac = DSAC::dayMatchedWhiteFmBaseline();
+    auto dsac = DSAC::shortTermWhiteFmBaseline();
     const double durationSeconds = durationDays * 86400.0;
     const double requestedSteps = durationSeconds / timeStepSeconds;
     if (!std::isfinite(durationSeconds) || durationSeconds <= 0 || !std::isfinite(timeStepSeconds)
@@ -233,10 +233,10 @@ void exportPlotFixtures(const std::filesystem::path& directory) {
               << "Isolated clock-only comparison: ideal ground clock; no measurement noise.\n"
               << "  " << local.configurationName() << ": D=" << local.parameters().frequency_drift_per_s
               << " /s, q_b=" << local.parameters().q_bias_s << " s, q_y=0 /s, seed=" << localSeed
-              << "; aging plus simplified white FM, not a full device spectrum fit.\n"
+              << "; representative USO-like preset: illustrative 5e-13 ADEV at 1 s, not a device fit.\n"
               << "  " << dsac.configurationName() << ": D=" << dsac.parameters().frequency_drift_per_s
               << " /s, q_b=" << dsac.parameters().q_bias_s
-              << " s, q_y=0 /s, seed=" << dsacSeed << "; effective approximation, not a fitted DSAC hardware model.\n"
+              << " s, q_y=0 /s, seed=" << dsacSeed << "; DSAC-inspired: ground-test short-term ADEV 1.5e-13/sqrt(tau/1 s).\n"
               << "  local initial: b0=" << localInitial.bias_s << " s, y0=" << localInitial.fractional_frequency
               << "; P0=[" << localP0(0,0) << ',' << localP0(0,1) << ';' << localP0(1,0) << ',' << localP0(1,1) << "]\n"
               << "  DSAC initial: b0=" << dsacInitial.bias_s << " s, y0=" << dsacInitial.fractional_frequency
@@ -247,7 +247,7 @@ void exportPlotFixtures(const std::filesystem::path& directory) {
               << "  Ideal initial calibration; ideal ground reference; constant aging uncompensated; simplified white FM; flicker/other long-term noise omitted.\n"
               << "  Simplified holdover comparison; sampled crossings are not mandatory ground-contact intervals.\n"
               << "  Sources: https://doi.org/10.1029/2025RS008244; https://doi.org/10.1038/s41586-021-03571-7\n"
-              << "  One-day ADEV reference: Tjoelker (2021), DSAC results, slide 21.\n";
+              << "  20-day white-FM continuation is illustrative extrapolation; measured long-term behavior is not reproduced.\n";
 }
 
 } // namespace

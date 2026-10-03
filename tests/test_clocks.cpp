@@ -109,15 +109,19 @@ void allanFactories() {
 }
 
 void referenceBaselines() {
-    const auto clock = DSAC::dayMatchedWhiteFmBaseline();
+    const auto legacy = DSAC::dayMatchedWhiteFmBaseline();
+    near(legacy.parameters().q_bias_s, 7.776e-25);
+    require(legacy.configurationName() == "DSAC_day_matched_white_FM_baseline", "Legacy name changed");
+    const auto clock = DSAC::shortTermWhiteFmBaseline();
     const auto& p = clock.parameters();
-    require(clock.configurationName() == "DSAC_day_matched_white_FM_baseline", "Wrong baseline name");
+    require(clock.configurationName() == "DSAC_inspired_short_term_white_FM", "Wrong baseline name");
     require(DSAC::fromParameters(p).configurationName() == "DSAC_custom",
         "Custom parameters must not implicitly claim a named baseline");
     near(p.frequency_drift_per_s, 3e-16 / 86400.0);
-    near(p.q_bias_s, 7.776e-25);
+    near(p.q_bias_s, 2.25e-26);
     near(p.q_frequency_per_s, 0);
-    near(theoreticalAllanDeviation(86400, p), 3e-15);
+    for (double tau : {1.0, 10.0, 1000.0})
+        near(theoreticalAllanDeviation(tau, p), 1.5e-13 / std::sqrt(tau));
     const auto local = LocalOscillator::representativeUsoAgingOnly();
     near(local.parameters().frequency_drift_per_s, 1e-10 / 86400.0);
     near(local.parameters().q_bias_s, 0);
@@ -133,9 +137,9 @@ void referenceBaselines() {
     near(uso_covariance(0,0), 2.5e-25 * 20*86400);
     near(3 * clockSpeedOfLightMPerS * std::sqrt(uso_covariance(0,0)), 0.5911311305394723, 1e-10);
     near(clockSpeedOfLightMPerS * uso.propagate({}, 20*86400).bias_s, 518041.367424, 1e-10);
-    for (const auto& row : {std::array<double,4>{2, 0.01554, 0.32968, 0.34522},
-                           std::array<double,4>{10, 0.38853, 0.73719, 1.12572},
-                           std::array<double,4>{20, 1.55412, 1.04254, 2.59666}}) {
+    for (const auto& row : {std::array<double,4>{2, 0.01554, 0.05608, 0.07162},
+                           std::array<double,4>{10, 0.38853, 0.12540, 0.51393},
+                           std::array<double,4>{20, 1.55412, 0.17734, 1.73146}}) {
         const double time = row[0]*86400;
         const double mean = clockSpeedOfLightMPerS * clock.propagate({}, time).bias_s;
         const double stochastic = 3*clockSpeedOfLightMPerS * std::sqrt(p.q_bias_s*time);
@@ -154,8 +158,11 @@ void referenceBaselines() {
         near(clock.processNoise(dt)(0, 0), p.q_bias_s * dt);
     }
     const double sigma = std::sqrt(p.q_bias_s * duration);
-    near(sigma * 1e9, 0.367, 0.002);
-    near(3 * clockSpeedOfLightMPerS * sigma, 0.330, 0.002);
+    near(sigma * 1e9, 0.062353829072479584);
+    near(3 * clockSpeedOfLightMPerS * sigma, 0.05607962305005154);
+    // Equal zero initial covariance: the white-FM uncertainty ratio is 0.30.
+    near(std::sqrt(p.q_bias_s / uso.parameters().q_bias_s), 0.30);
+    near(*clockCalibrationInterval(1, 20*86400, p) / 86400, 14.770082760120703);
     near(clockSpeedOfLightMPerS * clock.propagate({}, duration).bias_s, 0.0155, 0.003);
 
     const auto noise_free = DSAC::fromParameters({p.frequency_drift_per_s, 0, 0});

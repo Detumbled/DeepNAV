@@ -2,6 +2,15 @@
 
 namespace fd::clocks {
 
+DSAC DSAC::shortTermWhiteFmBaseline() {
+    // Burt et al. (2021), doi:10.1038/s41586-021-03571-7, abstract:
+    // ground-test short-term ADEV 1.5e-13/sqrt(tau/1 s).
+    // Known flight drift is separate; no long-term stochastic fit is implied.
+    constexpr double shortTermAdev = 1.5e-13;
+    return DSAC({3e-16 / 86400.0, shortTermAdev * shortTermAdev, 0.0},
+                "DSAC_inspired_short_term_white_FM");
+}
+
 DSAC DSAC::dayMatchedWhiteFmBaseline() {
     // Tjoelker (2021), slide 21: 3e-15 one-day ADEV.
     // Burt et al. (2021), doi:10.1038/s41586-021-03571-7: 3e-16/day drift.
