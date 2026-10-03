@@ -10,12 +10,14 @@ LightTimeSolution LightTimeSolver::solve(
     const dynamics::CartesianState& observerStateAtReception,
     const dynamics::StateProvider& targetProvider) const {
 
-    if (!observerStateAtReception.allFinite()) {
+    if (!std::isfinite(receptionEpoch.secondsPastJ2000)
+        || !observerStateAtReception.allFinite()) {
         throw std::invalid_argument(
             "Observer state contains non-finite values");
     }
 
-    if (!(options_.toleranceSeconds > 0.0) ||
+    if (!std::isfinite(options_.toleranceSeconds)
+        || !(options_.toleranceSeconds > 0.0) ||
         options_.maxIterations == 0) {
         throw std::invalid_argument(
             "Invalid light-time solver options");
@@ -35,10 +37,10 @@ LightTimeSolution LightTimeSolver::solve(
         observerStateAtReception.positionKm;
 
     double lightTime =
-        initialLineOfSight.norm() /
+        initialLineOfSight.stableNorm() /
         speedOfLightKmPerSecond;
 
-    if (!std::isfinite(lightTime)) {
+    if (!(lightTime > 0.0) || !std::isfinite(lightTime)) {
         throw std::runtime_error(
             "Initial light time is not finite");
     }
@@ -50,6 +52,9 @@ LightTimeSolution LightTimeSolver::solve(
         const TdbEpoch emissionEpoch{
             receptionEpoch.secondsPastJ2000 - lightTime
         };
+        if (!std::isfinite(emissionEpoch.secondsPastJ2000)) {
+            throw std::runtime_error("Emission epoch is not finite");
+        }
 
         const auto targetState =
             targetProvider.stateAt(emissionEpoch);
@@ -64,7 +69,7 @@ LightTimeSolution LightTimeSolver::solve(
             targetState.positionKm -
             observerStateAtReception.positionKm;
 
-        const double rangeKm = lineOfSight.norm();
+        const double rangeKm = lineOfSight.stableNorm();
 
         if (!(rangeKm > 0.0) || !std::isfinite(rangeKm)) {
             throw std::runtime_error(

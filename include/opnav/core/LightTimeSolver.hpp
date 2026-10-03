@@ -35,6 +35,8 @@ public:
         : options_(options) {}
 
     [[nodiscard]]
+    // Geometric states in the same inertial frame and origin; observer stays
+    // at reception while the target is evaluated at emission. No Shapiro delay.
     LightTimeSolution solve(
         TdbEpoch receptionEpoch,
         const dynamics::CartesianState& observerStateAtReception,

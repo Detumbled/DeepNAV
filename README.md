@@ -22,8 +22,12 @@ Implemented modules:
 - Modular perturbation models for third-body gravity and cannonball SRP.
 - A reusable Cartesian state type and simultaneous-epoch geometric
   camera-to-target line of sight, independent of CSPICE.
-- Pinhole camera projection with optional OpenCV-compatible radial and
-  tangential distortion.
+- Iterative light-time and first-order stellar aberration for body targets,
+  validated inertial-to-camera attitude rotations, and pinhole camera projection
+  with optional OpenCV-compatible radial and tangential distortion.
+- Pixel-integrated circular Gaussian image rendering and weighted five-parameter
+  centroid fitting with covariance, plus explicit unresolved-body photocenter
+  corrections from projected brightness models.
 - Two-state residual clock dynamics, seeded truth simulation, Allan-data
   configuration, covariance propagation, and conservative calibration budgets.
 - Focused tests for numerical integration, ephemeris interpolation, synthetic
@@ -37,8 +41,9 @@ Planned or partial areas:
   Voyager test into reusable library modules.
 - Full dynamics builder that sums central gravity, third bodies, SRP, and future force models.
 - Sequential filters and richer OD diagnostics.
-- Optical-navigation attitude transformations, light-time/apparent-direction
-  corrections, image measurements, and visualization work.
+- Optical star catalogs, limb/terminator and landmark geometry,
+  reflectance models, real-image calibration, optical OD partials/filter
+  integration, and visualization work.
 
 Longer-term directions include nonlinear optimization for trajectory and
 maneuver design, plus multi-agent spaceborne/ground antenna tracking. CppAD,
@@ -68,10 +73,17 @@ include/
     SpiceInterpolator.hpp
   opnav/
     CameraModel.hpp
+    CameraAttitude.hpp
     DistortionModel.hpp
     Types.hpp
     core/
       GeometricLineOfSight.hpp
+      LightTimeSolver.hpp
+      ApparentDirection.hpp
+    image/
+      CircularGaussian.hpp
+      CentroidEstimator.hpp
+      PhotocenterCorrection.hpp
   stations/
     ElevationMask.hpp
     StationCatalog.hpp
@@ -115,9 +127,16 @@ src/
     SpiceInterpolator.cpp
   opnav/
     CameraModel.cpp
+    CameraAttitude.cpp
     DistortionModel.cpp
     core/
       GeometricLineOfSight.cpp
+      LightTimeSolver.cpp
+      ApparentDirection.cpp
+    image/
+      CircularGaussian.cpp
+      CentroidEstimator.cpp
+      PhotocenterCorrection.cpp
   stations/
     ElevationMask.cpp
     StationCatalog.cpp
@@ -139,9 +158,12 @@ tests/
   test_clocks.cpp
   test_clock_history.cpp
   test_plot_clocks.py
+plot_centroid_demo.py
   test_ephemeris_interpolator.cpp
   test_geometric_line_of_sight.cpp
   test_optical.cpp
+  test_apparent_direction.cpp
+  test_centroid_estimator.cpp
   test_synth_observations.cpp
   test_synth_source_comparison.cpp
   test_voyager_position_od.cpp
@@ -215,6 +237,8 @@ cmake --build build-clang --target test_synth_observations -j4
 cmake --build build-clang --target test_synth_source_comparison -j4
 cmake --build build-clang --target test_voyager_position_od -j4
 cmake --build build-clang --target test_optical -j4
+cmake --build build-clang --target test_apparent_direction -j4
+cmake --build build-clang --target test_centroid_estimator -j4
 cmake --build build-clang --target test_geometric_line_of_sight -j4
 cmake --build build-clang --target station_catalog_demo -j4
 ```
@@ -233,6 +257,8 @@ ctest --test-dir build-clang -R test_synth_observations --output-on-failure
 ctest --test-dir build-clang -R test_synth_source_comparison --output-on-failure
 ctest --test-dir build-clang -R test_voyager_position_od --output-on-failure
 ctest --test-dir build-clang -R test_optical --output-on-failure
+ctest --test-dir build-clang -R '^test_apparent_direction$' --output-on-failure
+ctest --test-dir build-clang -R '^test_centroid_estimator$' --output-on-failure
 ctest --test-dir build-clang -R test_geometric_line_of_sight --output-on-failure
 ctest --test-dir build-clang -R '^test_clocks$' --output-on-failure
 ctest --test-dir build-clang -R '^test_clock_history$' --output-on-failure
@@ -560,43 +586,234 @@ Allan analysis follows the bias-second-difference definition in
 
 ### Optical Navigation
 
-The optical-navigation code is split into a CSPICE-independent geometry layer
-and a camera projection layer.
+The optical-navigation layer predicts body-target pixel coordinates following
+Owen, *Spacecraft Optical Navigation*, Sections 4.2 and 4.5-4.8. Geometry and
+attitude calculations depend only on Eigen; ephemerides enter through
+`fd::dynamics::StateProvider` and may be analytic or supplied by the caller.
 
-`fd::dynamics::CartesianState` stores position in kilometres and velocity in
-kilometres per second. Its `allFinite()` validation covers both state
-components. Velocity is retained for future apparent-direction and light-time
-work, although the current simultaneous-epoch geometry uses position only.
-
-`fd::opnav::core::computeGeometricLineOfSight(...)` calculates:
+The complete body-target prediction path is:
 
 ```text
-vectorKm      = target.positionKm - camera.positionKm
-rangeKm       = |vectorKm|
-unitDirection = vectorKm / rangeKm
+Geometric barycentric states -> light-time iteration -> stellar aberration
+                            -> inertial-to-camera rotation -> distorted pixel
 ```
 
-The function rejects non-finite states and coincident camera/target positions.
-It does not perform CSPICE retrieval, light-time iteration, stellar aberration,
-attitude transformations, or camera projection. `test_geometric_line_of_sight`
-covers a hand-computable geometry, unit direction and range, translation
-invariance, coincident positions, and non-finite input.
+Use `fd::dynamics::CartesianState`: position is in kilometres and velocity in
+kilometres per second. The reception epoch is the exposure midpoint, in TDB
+seconds past J2000. Observer and target states must be geometric states in the
+same barycentric inertial frame (for example J2000/ICRF with SSB origin).
+Observer velocity must be barycentric, not relative to the target. The raw
+observer state has no frame metadata, so the caller is responsible for matching
+it to the target provider. Do not supply states already corrected for light time
+or aberration. The provider must cover the retarded emission epochs.
 
-`fd::opnav::CameraModel` projects a direction already expressed in the camera
-frame onto pixel coordinates. It supports an identity distortion model and an
-OpenCV-compatible rational radial plus tangential distortion model. Directions
-with non-finite components or a non-positive camera-frame Z component are
-rejected. `test_optical` covers ideal projection, zero and non-zero distortion,
-boresight projection, and targets behind the camera.
-
-The current processing boundary is therefore:
+`fd::opnav::LightTimeSolver` holds the observer at reception and iterates the
+emission epoch of the target:
 
 ```text
-Cartesian states -> geometric LOS -> camera-frame direction -> pixel
+tau = |S(t - tau) - R(t)| / c
+T   = S(t - tau) - R(t)
 ```
 
-The attitude transformation needed to produce the camera-frame direction is
-not implemented yet.
+Its defaults are a 1e-9 s convergence tolerance and eight iterations. The result
+contains reception/emission epochs, target state at emission, the retarded LOS
+vector, iteration count, and the absolute fixed-point residual in seconds.
+`lightTimeSeconds` is the tau used to evaluate the returned emission state;
+`|T|/c` agrees within the reported residual. Accuracy is also limited by the
+provider and floating-point epoch resolution. Invalid epochs/options/states,
+zero range, and failure to converge throw exceptions. This is a geometric
+light-time calculation and does not include gravitational delay.
+
+`fd::opnav::core::computeApparentDirection(...)` wraps this solver and adds the
+paper's first-order stellar aberration (Eq. 4.3):
+
+```text
+A = T + tau * observer.velocityKmPerSec
+```
+
+It returns the light-time solution, apparent vector in kilometres, and its unit
+direction. The vector magnitude is not an optical range measurement; camera
+projection depends on its direction. This follows the paper's Newtonian
+approximation for ordinary spacecraft velocities, without relativistic
+aberration or gravitational light bending.
+
+`fd::opnav::CameraAttitude` accepts a proper 3x3 rotation matrix `C` with the
+explicit convention `directionCamera = C * directionInertial`. Its rows are
+camera axes expressed in inertial coordinates. Camera +Z is the viewing axis.
+A camera-to-inertial matrix must be transposed before construction. The matrix
+is checked once for finite entries, orthogonality, and determinant +1 (absolute
+tolerance 1e-12), then reused for every target in that exposure. Attitude
+retrieval, estimation, interpolation, and spacecraft-to-camera mounting
+calibration remain caller responsibilities; compose those rotations into `C`.
+
+`fd::opnav::CameraModel::project(directionInertial, attitude)` rotates and uses
+the existing camera-frame projection. The original `project(directionCamera)`
+overload remains available. Both apparent vectors and unit directions can be
+projected. The camera uses gnomonic projection, identity or OpenCV-compatible
+rational radial/tangential distortion, and a 2x2 focal-plane-to-pixel matrix
+plus principal point. It rejects non-finite directions and camera-frame Z <= 0.
+Projection does not clip to image bounds. The book's optional detector `xy`
+terms and additional misalignment models are not implemented.
+
+```cpp
+#include "dynamics/LinearStateProvider.hpp"
+#include "opnav/core/ApparentDirection.hpp"
+#include "opnav/CameraModel.hpp"
+
+using namespace fd::opnav;
+const TdbEpoch exposure(0.0);
+const fd::dynamics::CartesianState observer{{0, 0, 0}, {0, 30, 0}};
+const fd::dynamics::LinearStateProvider target(
+    exposure, {{0, 0, 299792.458}, {0, 0, 0}}, "J2000", "SSB");
+const CameraAttitude attitude(Eigen::Matrix3d::Identity());
+const CameraModel camera(CameraIntrinsics{
+    50.0, {1000.0, 500.0}, 20.0 * Eigen::Matrix2d::Identity()});
+const auto apparent = core::computeApparentDirection(exposure, observer, target);
+const auto pixel = camera.project(apparent.vectorKm, attitude);
+// About (1000, 500.100069) pixels: aberration displaces the image toward +Y.
+```
+
+`core::computeGeometricLineOfSight(...)` remains a simultaneous-epoch helper
+returning vector, range, and unit direction. It applies no light time or
+aberration. Both geometric and camera projection tests remain in place.
+`test_apparent_direction` links Eigen only and checks analytic stationary and
+moving-target light time, convergence failure, invalid inputs, aberration sign,
+rotation direction and inverse, projection scale invariance, and the complete
+state-to-pixel path. Fixed-size vectors/matrices avoid per-target heap storage;
+no numerical differentiation or extra ephemeris passes are needed.
+
+This completes the basic body-center prediction path. The image estimator below
+provides local centroid measurements and covariance. Star catalog propagation,
+limb/terminator geometry, body-fixed landmarks, general reflectance models,
+optical OD derivatives, and filter integration remain future work. Existing distortion support is a selectable practical model rather
+than an implementation of every camera calibration model in the book.
+
+### Image Centerfinding: Sections 5.2 and 5.4
+
+`opnav/image` implements a local image estimator for one isolated star or
+unresolved body. Inputs are calibrated DN grids with detector bias, flat-field,
+and readout-smear corrections already applied, plus known independent pixel
+variances in DN squared. Calibration and variance estimation are upstream
+responsibilities. This is a per-image fit, not a temporal navigation filter.
+
+`CircularGaussian` uses the standard deviation convention
+
+```text
+I(s,l) = h * exp(-((s-sc)^2 + (l-lc)^2)/(2*sigma^2))
+DN(pixel) = b + integral_over_pixel(I)
+parameters = [sc, lc, h, sigma, b]
+```
+
+Here `h` is continuous peak intensity, `sigma` is in pixels (FWHM is about
+2.355*sigma), and `b` is constant background DN per pixel. Total source signal
+is `2*pi*h*sigma^2`. This explicit convention differs from the book's printed
+Gaussian width/amplitude normalization; the pixel-integrated fitting approach
+is the same. Pixel centers have integer sample/line coordinates, boundaries
+are +/-0.5, and `Image(line, sample)` stores the grid in row-major order.
+An optional origin preserves full-image coordinates when fitting a cutout.
+
+`renderCircularGaussian` integrates each pixel with error functions, rather than
+sampling the intensity at its center. `simulateCircularGaussian` adds Poisson
+shot noise and Gaussian read noise with a seed. Gain is electrons per DN, read
+noise is in DN, and the returned expected variance is
+`meanDN/gain + readNoiseDN^2`. These simulated variances use the injected model;
+a real image needs its own calibrated noise estimate. Seeds reproduce draws
+within the same C++ standard-library implementation.
+
+`fitCircularGaussian` jointly estimates center, height, width, and background
+using weighted nonlinear least squares with analytic pixel derivatives and
+Levenberg-Marquardt damping. Logarithmic height/width keep them positive;
+scaled 5x5 normal equations limit numerical conditioning problems. One-dimensional
+pixel integrals are cached per axis and their storage is reused each iteration.
+Without an initial model, border-median background and positive signal moments
+provide a starting point. Supply a local window containing one source; this is
+not full-image source catalog detection or deblending.
+
+A nonzero `PixelMask` entry excludes a bad or saturated pixel. Unmasked DN and
+variances must be finite, variances strictly positive, and more than five pixels
+must remain in a window of at least 3x3. The fitted center must stay inside the
+window; trial widths are limited to 0.05 pixels through twice its largest
+dimension. Windows should include source wings and background. The default
+iteration limit is 80, step tolerance is 1e-7, and minimum fitted height SNR is 5.
+
+On success, `GaussianFitResult` contains the model, full five-parameter
+covariance, and a `PixelMeasurement` with sample/line coordinates and the full
+2x2 covariance in pixels squared. This is the inverse local WLS information,
+including nuisance-parameter coupling. Supplied pixel variances are treated as
+known, so covariance is not multiplied by the reduced chi-squared. The result
+also reports chi-squared, degrees of freedom, and iterations. Inspect reduced
+chi-squared for model mismatch; fit convergence alone does not establish image
+quality. PSF errors, illumination errors, correlated detector noise, and attitude
+uncertainty are not included in this covariance.
+
+`FitStatus` distinguishes `Converged`, `NoSignal`, `NonConverged`, and `Singular`.
+Only successful, sufficiently significant, observable fits return a measurement
+and covariance. Invalid grids/options throw exceptions. NoSignal may be reported
+for a converged fit below the configured height SNR. Strongly undersampled
+sources can remain unobservable: a literal one-pixel impulse contains no
+recoverable subpixel information.
+
+Section 5.4 uses the same fit to find an unresolved body's **photocenter**.
+`brightnessPhotocenterOffset` implements the discrete first moments of
+Eqs. 5.16-5.17 using a caller-supplied nonnegative, background-free projected
+body-brightness grid and its known geometric center. Coordinates and spacing
+must use the same pixel units as the measurement. Its offset is light center
+minus geometric center. This model grid is intrinsic body brightness, not a
+noisy observed image; its shape/illumination comes from the caller. Numerical
+first moments avoid reliance on the printed spherical shortcut in Eq. 5.18.
+General reflectance laws and a physical moon renderer are not yet implemented.
+
+`correctPhotocenter` subtracts a supplied `PhotocenterOffset` and returns a
+separate geometric-center measurement. It preserves the raw photocenter and
+adds offset-model covariance under an explicit independence assumption. The
+brightness-grid helper treats its model as exact and defaults that covariance
+to zero; supply nonzero uncertainty when the offset is uncertain. Apply the
+correction once, and compare the corrected observation with the predicted body
+center. Alternatively retain the raw photocenter and offset the prediction,
+but do not do both. A geometric center represents center of mass only when the
+body model justifies that assumption; a Gaussian fit cannot establish it.
+
+```cpp
+#include "opnav/image/PhotocenterCorrection.hpp"
+using namespace fd::opnav::image;
+
+const CircularGaussian source{{5.25, 5.4}, 2000.0, 0.7, 20.0};
+const auto synthetic = simulateCircularGaussian({11, 11}, source, {2.0, 3.0}, 42);
+const auto fit = fitCircularGaussian(synthetic.dn, synthetic.varianceDn2);
+if (fit.measurement) {
+    const PhotocenterOffset offset{Eigen::Vector2d{0.25, 0.0},
+                                  0.0001 * Eigen::Matrix2d::Identity()};
+    const auto geometric = correctPhotocenter(*fit.measurement, offset);
+    // Attach exposure midpoint, target/camera IDs, attitude, and quality metadata
+    // before passing geometric.center and geometric.covariance to an OD filter.
+}
+```
+
+The estimator does not attach target identity or time itself; it supplies the
+local measurement component. OD measurement construction, attitude uncertainty,
+optical Jacobians, and sequential-filter ingestion remain future work.
+
+`test_centroid_estimator` links Eigen only. It checks pixel integration against
+independent numerical quadrature, analytic derivatives against finite differences,
+flux conservation, five-parameter noiseless recovery over subpixel phases and
+PSF widths, masked pixels, and failure cases. A 200-image seeded Monte Carlo
+compares measured bias/scatter with reported covariance and detector-noise
+residuals. An end-to-end test uses the apparent-direction and camera models to
+place a synthetic unresolved moon, then independently fits its noisy image.
+The synthetic moon is a symmetric point source with zero physical photocenter
+offset; a separate asymmetric brightness-model test checks correction sign and
+propagation of offset uncertainty. These tests validate the assumed Gaussian
+and noise models, not general real-camera or moon performance.
+
+To export and inspect that demonstration:
+
+```sh
+./build-clang/test_centroid_estimator /tmp/centroid_demo.csv
+python3 plot_centroid_demo.py /tmp/centroid_demo.csv /tmp/centroid_demo.png
+```
+
+The figure shows pixel intensities, injected/fitted centers, and a joint 95%
+local Gaussian uncertainty ellipse. Normal CTest runs generate no output files.
 
 ### Station Catalog
 

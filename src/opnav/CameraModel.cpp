@@ -3,6 +3,12 @@
 
 namespace fd::opnav {
 
+PixelCoordinates CameraModel::project(
+    const Eigen::Vector3d& directionInertial,
+    const CameraAttitude& attitude) const {
+    return project(attitude.toCamera(directionInertial));
+}
+
 CameraModel::CameraModel(
     CameraIntrinsics intrinsics,
     std::shared_ptr<const DistortionModel> distortion)

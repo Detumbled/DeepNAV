@@ -161,8 +161,14 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     src/perturbations/SRP.cpp
 
     src/opnav/CameraModel.cpp
+    src/opnav/CameraAttitude.cpp
     src/opnav/DistortionModel.cpp
     src/opnav/core/GeometricLineOfSight.cpp
+    src/opnav/core/LightTimeSolver.cpp
+    src/opnav/core/ApparentDirection.cpp
+    src/opnav/image/CircularGaussian.cpp
+    src/opnav/image/CentroidEstimator.cpp
+    src/opnav/image/PhotocenterCorrection.cpp
 )
 
 set(BIG_FUNCTIONS_SOURCES)
@@ -189,6 +195,8 @@ set(APP_SOURCE_CANDIDATES
     tests/test_synth_source_comparison.cpp
     tests/test_voyager_position_od.cpp
     tests/test_optical.cpp
+    tests/test_apparent_direction.cpp
+    tests/test_centroid_estimator.cpp
     tests/test_geometric_line_of_sight.cpp
     tests/test_clocks.cpp
     tests/test_clock_history.cpp
@@ -218,6 +226,31 @@ foreach(app_src IN LISTS APP_SOURCES)
                 DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
             )
         endif()
+    elseif(app_name STREQUAL "test_apparent_direction")
+        target_sources(${app_name} PRIVATE
+            src/opnav/core/LightTimeSolver.cpp
+            src/opnav/core/ApparentDirection.cpp
+            src/opnav/CameraAttitude.cpp
+            src/opnav/CameraModel.cpp
+            src/opnav/DistortionModel.cpp
+            src/dynamics/LinearStateProvider.cpp
+        )
+        target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
+    elseif(app_name STREQUAL "test_centroid_estimator")
+        target_sources(${app_name} PRIVATE
+            src/opnav/image/CircularGaussian.cpp
+            src/opnav/image/CentroidEstimator.cpp
+            src/opnav/image/PhotocenterCorrection.cpp
+            src/opnav/core/LightTimeSolver.cpp
+            src/opnav/core/ApparentDirection.cpp
+            src/opnav/CameraAttitude.cpp
+            src/opnav/CameraModel.cpp
+            src/opnav/DistortionModel.cpp
+            src/dynamics/LinearStateProvider.cpp
+        )
+        target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
     elseif(app_name STREQUAL "test_geometric_line_of_sight")
         # Keep this geometry-only test independent of CSPICE and the graphics
         # stack. The implementation remains part of big_functions above.

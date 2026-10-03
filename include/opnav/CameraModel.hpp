@@ -2,6 +2,7 @@
 
 #include "opnav/Types.hpp"
 #include "opnav/DistortionModel.hpp"
+#include "opnav/CameraAttitude.hpp"
 #include <Eigen/Dense>
 #include <memory>
 
@@ -19,6 +20,10 @@ public:
     [[nodiscard]]
     PixelCoordinates project(
         const Eigen::Vector3d& directionCameraToTarget) const;
+
+    [[nodiscard]] PixelCoordinates project(
+        const Eigen::Vector3d& directionInertial,
+        const CameraAttitude& attitude) const;
 
     [[nodiscard]]
     const CameraIntrinsics& getIntrinsics() const noexcept { return intrinsics_; }
