@@ -39,4 +39,11 @@ struct GaussianFitResult {
     std::optional<CircularGaussian> initial = std::nullopt,
     GaussianFitOptions options = {});
 
+// One isolated source on a constant background: find the brightest unmasked
+// pixel and fit a small window. Output retains full-image coordinates.
+[[nodiscard]] GaussianFitResult fitBrightestCircularGaussian(
+    const Image& dn, const Image& varianceDn2, int windowRadius = 5,
+    PixelCoordinates origin = {}, const PixelMask* mask = nullptr,
+    GaussianFitOptions options = {});
+
 } // namespace fd::opnav::image

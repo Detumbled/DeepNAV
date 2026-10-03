@@ -169,6 +169,9 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     src/opnav/image/CircularGaussian.cpp
     src/opnav/image/CentroidEstimator.cpp
     src/opnav/image/PhotocenterCorrection.cpp
+    src/opnav/image/CassiniImage.cpp
+    src/opnav/image/EllipticalGaussian.cpp
+    src/opnav/image/EllipticalCentroidEstimator.cpp
 )
 
 set(BIG_FUNCTIONS_SOURCES)
@@ -197,6 +200,9 @@ set(APP_SOURCE_CANDIDATES
     tests/test_optical.cpp
     tests/test_apparent_direction.cpp
     tests/test_centroid_estimator.cpp
+    tests/test_cassini_image.cpp
+    tests/test_elliptical_centroid.cpp
+    cassini_centroid_demo.cpp
     tests/test_geometric_line_of_sight.cpp
     tests/test_clocks.cpp
     tests/test_clock_history.cpp
@@ -238,6 +244,9 @@ foreach(app_src IN LISTS APP_SOURCES)
         target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
         target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
     elseif(app_name STREQUAL "test_centroid_estimator")
+        target_compile_definitions(${app_name} PRIVATE
+            DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
         target_sources(${app_name} PRIVATE
             src/opnav/image/CircularGaussian.cpp
             src/opnav/image/CentroidEstimator.cpp
@@ -249,6 +258,19 @@ foreach(app_src IN LISTS APP_SOURCES)
             src/opnav/DistortionModel.cpp
             src/dynamics/LinearStateProvider.cpp
         )
+        target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
+    elseif(app_name STREQUAL "cassini_centroid_demo" OR app_name STREQUAL "test_cassini_image"
+           OR app_name STREQUAL "test_elliptical_centroid")
+        target_compile_definitions(${app_name} PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        target_sources(${app_name} PRIVATE src/opnav/image/CassiniImage.cpp)
+        if(app_name STREQUAL "cassini_centroid_demo" OR app_name STREQUAL "test_elliptical_centroid")
+            target_sources(${app_name} PRIVATE
+                src/opnav/image/CircularGaussian.cpp
+                src/opnav/image/CentroidEstimator.cpp
+                src/opnav/image/EllipticalGaussian.cpp
+                src/opnav/image/EllipticalCentroidEstimator.cpp)
+        endif()
         target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
         target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
     elseif(app_name STREQUAL "test_geometric_line_of_sight")

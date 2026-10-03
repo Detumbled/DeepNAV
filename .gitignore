@@ -1,5 +1,6 @@
 build-clang/
 /Output clocks/
+/Output optical/
 .DS_Store
 .vscode/
 Kernels/
@@ -7,6 +8,7 @@ kernels.tm
 test_mrp_class.cpp
 examples/
 third_party/
+Input optical/
 AGENTS.md
 
 

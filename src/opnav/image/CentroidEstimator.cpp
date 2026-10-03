@@ -5,6 +5,7 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <numbers>
+#include <limits>
 
 namespace fd::opnav::image {
 namespace {
@@ -182,6 +183,39 @@ GaussianFitResult fitCircularGaussian(const Image& dn, const Image& varianceDn2,
     result.parameterCovariance = covariance;
     result.measurement = PixelMeasurement{result.model.center, covariance.topLeftCorner<2, 2>()};
     return result;
+}
+
+GaussianFitResult fitBrightestCircularGaussian(const Image& dn, const Image& varianceDn2,
+    int windowRadius, PixelCoordinates origin, const PixelMask* mask, GaussianFitOptions options) {
+    detail::validateOrigin(origin);
+    if (windowRadius < 1 || dn.rows() < 3 || dn.cols() < 3
+        || dn.rows() != varianceDn2.rows() || dn.cols() != varianceDn2.cols()
+        || (mask && (mask->rows() != dn.rows() || mask->cols() != dn.cols())))
+        throw std::invalid_argument("Source search needs matching grids, at least 3x3, and positive radius.");
+    Eigen::Index peakSample = 0, peakLine = 0;
+    double peak = -std::numeric_limits<double>::infinity();
+    for (Eigen::Index l = 0; l < dn.rows(); ++l)
+        for (Eigen::Index s = 0; s < dn.cols(); ++s) {
+            if (mask && (*mask)(l, s)) continue;
+            if (!std::isfinite(dn(l, s)) || !std::isfinite(varianceDn2(l, s))
+                || varianceDn2(l, s) <= 0 || !std::isfinite(1/varianceDn2(l, s)))
+                throw std::invalid_argument("Unmasked pixels need finite DN and positive finite variance.");
+            if (dn(l, s) > peak) { peak = dn(l, s); peakSample = s; peakLine = l; }
+        }
+    if (!std::isfinite(peak)) throw std::invalid_argument("Source search has no usable pixels.");
+    const Eigen::Index diameter = 2*static_cast<Eigen::Index>(windowRadius) + 1;
+    const Eigen::Index width = std::min(diameter, dn.cols());
+    const Eigen::Index height = std::min(diameter, dn.rows());
+    // Shift edge windows inward to retain as much background as possible.
+    const Eigen::Index firstSample = std::clamp(peakSample-windowRadius, Eigen::Index{0}, dn.cols()-width);
+    const Eigen::Index firstLine = std::clamp(peakLine-windowRadius, Eigen::Index{0}, dn.rows()-height);
+    const Image window = dn.block(firstLine, firstSample, height, width);
+    const Image variance = varianceDn2.block(firstLine, firstSample, height, width);
+    PixelMask windowMask;
+    if (mask) windowMask = mask->block(firstLine, firstSample, height, width);
+    return fitCircularGaussian(window, variance,
+        {origin.sample+firstSample, origin.line+firstLine}, mask ? &windowMask : nullptr,
+        std::nullopt, options);
 }
 
 } // namespace fd::opnav::image

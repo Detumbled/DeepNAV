@@ -726,8 +726,13 @@ Levenberg-Marquardt damping. Logarithmic height/width keep them positive;
 scaled 5x5 normal equations limit numerical conditioning problems. One-dimensional
 pixel integrals are cached per axis and their storage is reused each iteration.
 Without an initial model, border-median background and positive signal moments
-provide a starting point. Supply a local window containing one source; this is
-not full-image source catalog detection or deblending.
+provide a starting point. Supply a local window containing one source. For a
+larger frame with one isolated source on constant background, use
+`fitBrightestCircularGaussian`: it searches the brightest unmasked pixel and
+fits an 11x11 window by default (configurable radius), shifted inward at image
+edges. The cutout origin preserves full-image output coordinates. Mask hot or
+saturated pixels before detection. This is not source catalog detection or
+deblending; a field of stars needs target association before fitting.
 
 A nonzero `PixelMask` entry excludes a bad or saturated pixel. Unmasked DN and
 variances must be finite, variances strictly positive, and more than five pixels
@@ -778,8 +783,8 @@ body model justifies that assumption; a Gaussian fit cannot establish it.
 using namespace fd::opnav::image;
 
 const CircularGaussian source{{5.25, 5.4}, 2000.0, 0.7, 20.0};
-const auto synthetic = simulateCircularGaussian({11, 11}, source, {2.0, 3.0}, 42);
-const auto fit = fitCircularGaussian(synthetic.dn, synthetic.varianceDn2);
+const auto synthetic = simulateCircularGaussian({120, 120}, source, {2.0, 3.0}, 42);
+const auto fit = fitBrightestCircularGaussian(synthetic.dn, synthetic.varianceDn2);
 if (fit.measurement) {
     const PhotocenterOffset offset{Eigen::Vector2d{0.25, 0.0},
                                   0.0001 * Eigen::Matrix2d::Identity()};
@@ -799,21 +804,135 @@ flux conservation, five-parameter noiseless recovery over subpixel phases and
 PSF widths, masked pixels, and failure cases. A 200-image seeded Monte Carlo
 compares measured bias/scatter with reported covariance and detector-noise
 residuals. An end-to-end test uses the apparent-direction and camera models to
-place a synthetic unresolved moon, then independently fits its noisy image.
+place a synthetic unresolved moon, then independently detects and fits a local
+window of its noisy image. Large-frame checks cover 120x120 images, near-edge
+sources, full-image origins, and masked spurious peaks.
 The synthetic moon is a symmetric point source with zero physical photocenter
 offset; a separate asymmetric brightness-model test checks correction sign and
 propagation of offset uncertainty. These tests validate the assumed Gaussian
 and noise models, not general real-camera or moon performance.
 
-To export and inspect that demonstration:
+The demo automatically writes `Output optical/centroid_demo.csv` inside DeepNAV,
+including when the executable is launched from `build-clang`. The plotter reads
+that file by default, saves `centroid_demo.png` beside it, and opens an interactive
+Matplotlib window with zoom/pan controls. Its defaults are relative to the script,
+independent of the current working directory.
+
+From the DeepNAV directory:
 
 ```sh
-./build-clang/test_centroid_estimator /tmp/centroid_demo.csv
-python3 plot_centroid_demo.py /tmp/centroid_demo.csv /tmp/centroid_demo.png
+cmake --build build-clang --target test_centroid_estimator -j4
+./build-clang/test_centroid_estimator
+python3 plot_centroid_demo.py
 ```
 
+Change the `ImageSize` passed to `simulateCircularGaussian` in
+`stateToImageToObservation()` to change demo dimensions; CSV export and plotting
+automatically use the full grid. Increasing image dimensions does not change
+the projected target position or camera principal point.
+
 The figure shows pixel intensities, injected/fitted centers, and a joint 95%
-local Gaussian uncertainty ellipse. Normal CTest runs generate no output files.
+local Gaussian uncertainty ellipse. Use `--no-show` to save without opening a
+window. Optional CSV/figure paths still override the defaults. Normal CTest runs
+also refresh the demo CSV. Generated files in `Output optical` are ignored by Git.
+
+#### Rotated elliptical Gaussian
+
+`include/opnav/image/EllipticalGaussian.hpp` provides `EllipticalGaussian`,
+`evaluateEllipticalGaussianPixel`, `renderEllipticalGaussian`,
+`fitEllipticalGaussian`, and `fitBrightestEllipticalGaussian`. The fitting API
+uses the same image/variance/mask grids, full-image origin, status enum, options,
+and centroid covariance as the circular estimator. The seven physical parameters
+are `[sample, line, height, sigmaMajor, sigmaMinor, angle, background]`.
+Widths are standard deviations in pixels; the angle is radians from +sample
+toward +line (clockwise when displayed line-down). Returned axes are ordered
+major >= minor, with angle in `[-pi/2, pi/2)`.
+
+Unlike an axis-aligned Gaussian, a rotated profile is not separable over detector
+pixels. Its intensity and analytic derivatives are integrated with cached 16x16
+Gauss-Legendre quadrature. Widths below 0.2 pixels are unsupported. The fit uses
+scaled damped least squares and a positive-definite precision matrix parameterized
+through its Cholesky factor, avoiding the undefined angle of a circular source.
+The returned centroid covariance remains valid in the circular limit; the full
+physical parameter covariance is omitted for nearly circular shapes because
+their orientation is undefined. Covariances assume the supplied fixed variances
+and the Gaussian model, without automatic chi-squared rescaling.
+
+`test_elliptical_centroid` checks independent numerical integration, all seven
+pixel partials, circular-model agreement, flux, rotated/narrow noiseless recovery,
+masks, edge searches, and circular degeneracy. Seeded noisy images check both
+centroid and full physical parameter covariance against scatter.
+
+#### Real Cassini image diagnostic
+
+![Cassini optical navigation: observed image, circular and elliptical Gaussian fits, and residual comparison](docs/images/cassini_centroid_comparison.png)
+
+*Circular and rotated elliptical fits to a Cassini ISS image, with shared color
+scales for comparison. Structured residuals reveal the remaining model mismatch.
+Source image: NASA/JPL-Caltech/Space Science Institute.*
+
+`loadCassiniImage` in `include/opnav/image/CassiniImage.hpp` reads an original
+Cassini PDS3 `.IMG` with its detached `.LBL` (same basename). The supported EDR
+layout is fixed-length records, single-band VICAR BSQ/HALF, big-endian signed
+16-bit storage, and direct `12BIT` DN conversion. It checks the file size,
+record-based image pointer, dimensions, byte order, header/telemetry offset,
+and line prefixes against both labels. Renamed JPEGs, truncated files,
+inconsistent layouts, missing packets, and other pixel formats are rejected.
+The loader preserves original DN values; it does not perform ISS calibration.
+
+Place `N1476124698_2.IMG` and `N1476124698_2.LBL` in `Input Optical/`, then run
+these commands from DeepNAV:
+
+```sh
+cmake --build build-clang --target cassini_centroid_demo test_cassini_image test_elliptical_centroid -j4
+ctest --test-dir build-clang -R 'test_(cassini_image|centroid_estimator|elliptical_centroid)$' --output-on-failure
+./build-clang/cassini_centroid_demo
+python3 plot_cassini_centroid.py
+```
+
+The executable selects the brightest nonnegative, unsaturated pixel and fits both
+Gaussian models to the same 21x21 window and weights, clipped at image edges.
+It also calculates a brightness first moment using positive background-subtracted
+DN, and compares centers in windows of radius `R-2`, `R`, and `R+2` (bounded to
+2..50), with the same background/noise estimate across those windows.
+Override the seed in original zero-based
+sample/line coordinates, or change the window radius, when needed:
+
+```sh
+./build-clang/cassini_centroid_demo "Input Optical/N1476124698_2.IMG" --sample 687 --line 569 --radius 10
+```
+
+Pixels at or above 4095 DN and negative samples are masked. Fit weights use
+the robust local background variance (MAD in a surrounding square annulus,
+with a quantization variance floor) plus an approximate source shot variance
+`max(DN - background, 0) / gain`. Gain and exposure are read from the label.
+This is a diagnostic noise estimate, not calibrated detector uncertainty.
+The fitted constant background absorbs a uniform bias; spatial bias, flat
+field, dark current, and other detector corrections remain unimplemented.
+
+Outputs default to `Output optical/cassini/`: `image.csv` stores the full raw
+DN matrix, `fit.csv` stores observed pixels, both models and residuals, and masks.
+`summary.json` stores both fits, centroid covariances, reduced chi-squared, and
+the brightness centroid. `window_comparison.csv` stores centers, fit statuses,
+and statistics for the three window sizes. `--output DIR` changes the destination.
+The Python plotter displays the full image, local data, both pixel-integrated
+models and their residuals with shared color scales. A second figure compares
+center sensitivity to window size. The interactive Matplotlib windows also save
+`cassini_centroid.png` and `window_sensitivity.png` beside the data.
+Display stretching never changes the fit pixels. Use `--no-show` for a
+headless plot, or pass another output directory as its positional argument.
+
+For this image, the radius-10 circular fit converges near `(684.799, 567.818)`
+pixels, while the ellipse gives `(684.785, 567.805)` (about 0.019 pixels apart).
+Reduced chi-squared decreases from about 1418 to 891. The source remains
+asymmetric and both models have residuals much larger than the estimated noise.
+The preview had hidden the resolved structure. This is a useful model-mismatch diagnostic, not a validated
+unresolved-source navigation measurement. The reported covariance assumes the
+Gaussian/noise model; it does not include those modelling errors. No geometric
+center correction, confirmed source identification, camera calibration, or
+SPICE prediction is applied. The loader tests independently exercise signed
+decoding and record skipping with generated fixtures; the downloaded image is
+also checked when present, but is not required to run the tests.
 
 ### Station Catalog
 

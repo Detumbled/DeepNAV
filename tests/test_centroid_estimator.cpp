@@ -5,6 +5,7 @@
 #include <Eigen/Cholesky>
 #include <cmath>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -187,17 +188,41 @@ void failureCases() {
     std::cout << "PASS: no signal, singular/nonconverged fits, and invalid inputs\n";
 }
 
-void stateToImageToObservation(const char* demoPath) {
+void largeImageLocalFit() {
+    for (const PixelCoordinates center : {PixelCoordinates{8.01, 2.03}, PixelCoordinates{102.23, 17.38}}) {
+        const img::CircularGaussian truth{center, 5000, 0.7, 30};
+        const auto image = img::simulateCircularGaussian({120, 120}, truth, {2, 3}, 42);
+        const PixelCoordinates origin{100, 200};
+        const auto fit = img::fitBrightestCircularGaussian(image.dn, image.varianceDn2, 5, origin);
+        success(fit);
+        const Eigen::Vector2d error{fit.model.center.sample-center.sample-origin.sample,
+                                   fit.model.center.line-center.line-origin.line};
+        require(error.dot(fit.measurement->covariance.ldlt().solve(error)) < 25,
+                "Local fit in a large image lost full-image coordinates.");
+        require(fit.degreesOfFreedom == 116, "Large-image fit did not use an 11x11 window.");
+    }
+    auto image = img::renderCircularGaussian({120, 120}, {{102.23, 17.38}, 5000, 0.7, 30});
+    img::PixelMask mask = img::PixelMask::Zero(120, 120);
+    image(60, 60) = 1e9; mask(60, 60) = 1;
+    const auto fit = img::fitBrightestCircularGaussian(image, img::Image::Constant(120, 120, 9), 5, {}, &mask);
+    success(fit);
+    near(fit.model.center.sample, 102.23, 1e-6);
+    near(fit.model.center.line, 17.38, 1e-6);
+    rejects([&] { (void)img::fitBrightestCircularGaussian(image, img::Image::Ones(120, 120), 0); });
+    std::cout << "PASS: brightest-source search, local fitting in 120x120 images, and masked peaks\n";
+}
+
+void stateToImageToObservation(const std::filesystem::path& demoPath) {
     const TdbEpoch epoch(0);
     const fd::dynamics::CartesianState observer{{0, 0, 0}, {3, 10, 0}};
-    const fd::dynamics::LinearStateProvider moon(epoch, {{0, 0, 299792.458}, {0, 0, 0}}, "J2000", "SSB");
+    const fd::dynamics::LinearStateProvider moon(epoch, {{900.0, 900.0, 299792.458}, {0, 0, 0}}, "J2000", "SSB");
     const CameraModel camera(CameraIntrinsics{50, {5, 5}, 20*Eigen::Matrix2d::Identity()});
     const auto apparent = core::computeApparentDirection(epoch, observer, moon);
     const auto pixel = camera.project(apparent.vectorKm, CameraAttitude(Eigen::Matrix3d::Identity()));
     // Unresolved symmetric moon: photocenter offset is zero in this first model.
     const img::CircularGaussian truth{pixel, 5000, 0.7, 30};
-    const auto image = img::simulateCircularGaussian({11, 11}, truth, {2, 3}, 42);
-    const auto fit = img::fitCircularGaussian(image.dn, image.varianceDn2);
+    const auto image = img::simulateCircularGaussian({120, 120}, truth, {2, 3}, 42);
+    const auto fit = img::fitBrightestCircularGaussian(image.dn, image.varianceDn2);
     success(fit);
     const Eigen::Vector2d error{fit.model.center.sample-pixel.sample, fit.model.center.line-pixel.line};
     require(error.dot(fit.measurement->covariance.ldlt().solve(error)) < 25,
@@ -207,17 +232,22 @@ void stateToImageToObservation(const char* demoPath) {
               << fit.model.center.sample << ',' << fit.model.center.line << "), error=" << error.norm()
               << " px, sigma=(" << std::sqrt(fit.measurement->covariance(0, 0)) << ','
               << std::sqrt(fit.measurement->covariance(1, 1)) << ") px\n";
-    if (demoPath) {
+    {
+        if (!demoPath.parent_path().empty())
+            std::filesystem::create_directories(demoPath.parent_path());
         std::ofstream csv(demoPath);
         csv.exceptions(std::ios::failbit | std::ios::badbit);
         csv << "sample,line,dn,variance_dn2,true_sample,true_line,fit_sample,fit_line,"
-               "variance_sample,variance_line,covariance_sample_line\n" << std::setprecision(17);
-        for (int l = 0; l < 11; ++l)
-            for (int s = 0; s < 11; ++s)
+               "variance_sample,variance_line,covariance_sample_line,psf_sigma_pixels\n" << std::setprecision(17);
+        for (Eigen::Index l = 0; l < image.dn.rows(); ++l)
+            for (Eigen::Index s = 0; s < image.dn.cols(); ++s)
                 csv << s << ',' << l << ',' << image.dn(l, s) << ',' << image.varianceDn2(l, s)
                     << ',' << pixel.sample << ',' << pixel.line << ',' << fit.model.center.sample
                     << ',' << fit.model.center.line << ',' << fit.measurement->covariance(0, 0)
-                    << ',' << fit.measurement->covariance(1, 1) << ',' << fit.measurement->covariance(0, 1) << '\n';
+                    << ',' << fit.measurement->covariance(1, 1) << ',' << fit.measurement->covariance(0, 1)
+                    << ',' << truth.sigmaPixels << '\n';
+        csv.close();
+        std::cout << "Saved " << demoPath << '\n';
     }
 }
 } // namespace
@@ -230,7 +260,10 @@ int main(int argc, char** argv) {
         covarianceMonteCarlo();
         photocenterCorrection();
         failureCases();
-        stateToImageToObservation(argc == 2 ? argv[1] : nullptr);
+        largeImageLocalFit();
+        const auto demoPath = argc == 2 ? std::filesystem::path(argv[1])
+            : std::filesystem::path(DEEPNAV_SOURCE_DIR) / "Output optical" / "centroid_demo.csv";
+        stateToImageToObservation(demoPath);
         std::cout << "All image-estimator tests passed.\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;
