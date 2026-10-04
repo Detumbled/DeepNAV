@@ -139,6 +139,27 @@ set(CLOCK_SOURCES
 )
 set(CLOCK_CSV_SOURCES src/utils/ClockCsvWriter.cpp)
 
+add_library(deepnav_clocks STATIC ${CLOCK_SOURCES})
+target_include_directories(deepnav_clocks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(deepnav_clocks PUBLIC Eigen3::Eigen)
+
+set(EKF_SOURCES
+    src/RKF45Integrator.cpp
+    src/filters/filter.cpp
+    src/filters/EKF.cpp
+    src/filters/CartesianPropagator.cpp
+    src/observations/GeometricRadiometricModel.cpp
+    src/perturbations/ForceModel.cpp
+    src/perturbations/GravitationalModel.cpp
+    src/perturbations/SRPModel.cpp
+    src/perturbations/Eclipse.cpp
+)
+
+# Reusable numerical filtering target without CSPICE or graphics linkage.
+add_library(deepnav_ekf STATIC ${EKF_SOURCES})
+target_include_directories(deepnav_ekf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(deepnav_ekf PUBLIC Eigen3::Eigen deepnav_clocks)
+
 set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     ${CLOCK_SOURCES}
     ${CLOCK_CSV_SOURCES}
@@ -148,17 +169,24 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     src/dynamics/EphemerisInterpolator.cpp
     src/dynamics/SpiceInterpolator.cpp
     src/dynamics/ConstantStateProvider.cpp
+    src/dynamics/SpiceEarthEnvironment.cpp
     src/dynamics/LinearStateProvider.cpp
     src/filters/filter.cpp
     src/filters/WLS.cpp
     src/filters/BatchLeastSquaresDriver.cpp
+    src/filters/EKF.cpp
+    src/filters/CartesianPropagator.cpp
+    src/observations/GeometricRadiometricModel.cpp
     src/observations/synth/obs_synth.cpp
     src/observations/synth/TargetStateProvider.cpp
     src/observations/synth/RangeSynth.cpp
     src/observations/synth/RangeRateSynth.cpp
     src/observations/synth/VLBISynth.cpp
     src/perturbations/Gravitational.cpp
+    src/perturbations/GravitationalModel.cpp
     src/perturbations/SRP.cpp
+    src/perturbations/SRPModel.cpp
+    src/perturbations/ForceModel.cpp
 
     src/opnav/CameraModel.cpp
     src/opnav/CameraAttitude.cpp
@@ -181,8 +209,9 @@ foreach(candidate_src IN LISTS BIG_FUNCTIONS_SOURCE_CANDIDATES)
     endif()
 endforeach()
 
+list(REMOVE_ITEM BIG_FUNCTIONS_SOURCES ${EKF_SOURCES} ${CLOCK_SOURCES})
 add_library(big_functions STATIC ${BIG_FUNCTIONS_SOURCES})
-target_link_libraries(big_functions PUBLIC project_dependencies)
+target_link_libraries(big_functions PUBLIC project_dependencies deepnav_ekf)
 
 # ------------------------------
 # 7. Executables
@@ -206,6 +235,10 @@ set(APP_SOURCE_CANDIDATES
     tests/test_geometric_line_of_sight.cpp
     tests/test_clocks.cpp
     tests/test_clock_history.cpp
+    tests/test_ekf.cpp
+    tests/test_perturbation_models.cpp
+    tests/test_spice_environment.cpp
+    ekf_demo.cpp
 
     tests/Optical/test_opnav_geometry.cpp
 )
@@ -221,12 +254,19 @@ foreach(app_src IN LISTS APP_SOURCES)
     get_filename_component(app_name "${app_src}" NAME_WE)
     add_executable(${app_name} "${app_src}")
 
-    if(app_name STREQUAL "test_clocks" OR app_name STREQUAL "test_clock_history")
-        target_sources(${app_name} PRIVATE ${CLOCK_SOURCES} ${CLOCK_CSV_SOURCES})
+    if(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "test_spice_environment")
+        target_link_libraries(${app_name} PRIVATE big_functions)
+        target_compile_definitions(${app_name} PRIVATE
+            DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    elseif(app_name STREQUAL "test_ekf"
+       OR app_name STREQUAL "test_perturbation_models")
+        target_link_libraries(${app_name} PRIVATE deepnav_ekf)
+    elseif(app_name STREQUAL "test_clocks" OR app_name STREQUAL "test_clock_history")
+        target_sources(${app_name} PRIVATE ${CLOCK_CSV_SOURCES})
         target_include_directories(${app_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
         )
-        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
+        target_link_libraries(${app_name} PRIVATE deepnav_clocks)
         if(app_name STREQUAL "test_clock_history")
             target_compile_definitions(${app_name} PRIVATE
                 DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"

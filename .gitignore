@@ -1,6 +1,7 @@
 build-clang/
 /Output clocks/
 /Output optical/
+/Output EKF/
 .DS_Store
 .vscode/
 Kernels/

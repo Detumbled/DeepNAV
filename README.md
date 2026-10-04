@@ -16,6 +16,8 @@ Implemented modules:
   interpolation.
 - Batch Weighted Least Squares filtering with a priori information and an
   iterative convergence driver.
+- Modular 6/8-state Extended Kalman filtering, Cartesian state/STM propagation,
+  joint radiometric benchmark updates, and single-run tracking-gap diagnostics.
 - Synthetic one-way range, range-rate, and VLBI differential range observations.
 - Interchangeable propagated-ephemeris and direct-CSPICE target-state sources.
 - Solar Shapiro delay applied to synthetic radiometric observables.
@@ -39,8 +41,9 @@ Planned or partial areas:
 
 - Promotion of the estimator's computed-observation and dynamics code from the
   Voyager test into reusable library modules.
-- Full dynamics builder that sums central gravity, third bodies, SRP, and future force models.
-- Sequential filters and richer OD diagnostics.
+- Complete mission-specific force configurations, eclipse modelling, and future force models.
+- Voyager sequential-OD integration, retarded-time uplink/clock observation
+  models, and ensemble consistency/tracking-budget studies.
 - Optical star catalogs, limb/terminator and landmark geometry,
   reflectance models, real-image calibration, optical OD partials/filter
   integration, and visualization work.
@@ -89,6 +92,9 @@ include/
     StationCatalog.hpp
     Stations.hpp
   filters/
+    EKFTypes.hpp
+    EKF.hpp
+    CartesianPropagator.hpp
     BatchLeastSquaresDriver.hpp
     filter.hpp
     WLS.hpp
@@ -98,7 +104,10 @@ include/
     RangeRateSynth.hpp
     TargetStateProvider.hpp
     VLBISynth.hpp
+  observations/
+    GeometricRadiometricModel.hpp
   perturbations/
+    ForceModel.hpp
     Gravitational.hpp
     SRP.hpp
     Shapiro.hpp
@@ -141,6 +150,8 @@ src/
     ElevationMask.cpp
     StationCatalog.cpp
   filters/
+    EKF.cpp
+    CartesianPropagator.cpp
     BatchLeastSquaresDriver.cpp
     filter.cpp
     WLS.cpp
@@ -150,11 +161,19 @@ src/
     RangeRateSynth.cpp
     TargetStateProvider.cpp
     VLBISynth.cpp
+  observations/
+    GeometricRadiometricModel.cpp
   perturbations/
+    ForceModel.cpp
     Gravitational.cpp
+    GravitationalModel.cpp
     SRP.cpp
+    SRPModel.cpp
 
 tests/
+  test_ekf.cpp
+  test_perturbation_models.cpp
+  plot_ekf.py
   test_clocks.cpp
   test_clock_history.cpp
   test_plot_clocks.py
@@ -171,6 +190,9 @@ plot_centroid_demo.py
 test_rkf45.cpp
 test_stations.cpp
 station_catalog_demo.cpp
+ekf_demo.cpp
+montecarlo/
+  README.md
 kernels.tm
 plot_clocks.py
 ```
@@ -995,6 +1017,219 @@ LDLT is attempted first, with QR fallback for robustness.
 updates. It supports iteration callbacks and convergence checks based on
 weighted RMS and whole-state, component, or state-block correction tolerances.
 
+### Extended Kalman Filter
+
+`fd::filters::EKF` implements a forward, additive EKF with a fixed layout:
+
+- `StateLayout::Orbit`: `[rx, ry, rz, vx, vy, vz]` (km and km/s).
+- `StateLayout::OrbitClock`: the same six components followed by clock bias `b`
+  (s, clock minus reference) and fractional frequency `y` (dimensionless).
+
+The estimator has no SPICE, force-model, or station dependencies. Its propagation
+callback returns the nonlinear predicted state, state transition matrix, and
+**discrete** process covariance for the requested interval. Its measurement
+callback returns predicted observations and their Jacobian at the current
+estimate. The same callbacks can be reused by standalone ensemble runners.
+
+Prediction uses `P- = Phi P+ Phi^T + Qd`. Updates process all measurements at an
+epoch jointly with a frozen linearization and a full positive-definite `R`,
+preserving measurement correlations and orbit-clock cross covariance. A scaled
+Cholesky solve avoids explicit inversion; Joseph form updates the covariance.
+Covariance checks normalize units before testing symmetry/definiteness, so tiny
+clock variances are not hidden by large orbital entries. Initial and process
+covariances may be positive semidefinite, including zero.
+
+`update` returns the pre-update innovation, innovation covariance, Cholesky-whitened
+innovation, NIS, and acceptance flag. An optional positive `nisLimit` rejects the
+entire measurement vector without changing state/covariance. Gating is disabled
+by default; choose a threshold for the measurement dimension and application.
+Invalid model outputs are rejected before committing filter state. `processBatch`
+offers the existing `Filter` interface for already-computed residuals/Jacobians.
+
+Updates require an exact match to the current filter epoch. Prediction is forward
+only; predicting to the same epoch is a no-op. Drivers must account for measurement
+availability, latent data, and Doppler count-interval completion rather than
+silently treating delayed measurements as current observations. Use continuous
+time internally; clock states are residual errors relative to the declared
+reference, not replacements for TDB/proper-time conversion models.
+
+#### Cartesian propagation and observation adapters
+
+`CartesianPropagator` delegates numerical integration to the existing
+`od::RKF45Integrator`; no separate RK4 implementation is maintained. It integrates
+the six Cartesian states and the 36 STM entries together. With nonzero inertial
+white-acceleration diffusion (km^2/s^3), it also integrates the 36 entries of the
+discrete noise covariance via `Qd_dot = A Qd + Qd A^T + G Qc G^T`, starting at zero.
+There is no local constant-velocity approximation for the nonlinear noise integral.
+State and STM use declared numerical scales (default 10,000 km and 10 km/s);
+noise covariance uses separate interval/diffusion-derived scales so small noise
+terms participate in adaptive error control. Configure tolerances and adaptive
+steps through `CartesianPropagationConfig::integrator`. Integration uses elapsed
+time, while force callbacks receive the absolute epoch.
+
+The `perturbations` module owns `AccelerationEvaluation` (acceleration and
+position/velocity partials), `pointMassGravity(mu)`, geometry-only
+`thirdBodyGravity(mu, spacecraftPosition, centralToBody)`, and `sumAccelerations`.
+`SolarRadiationPressure::evaluateAtSunPosition` reuses the existing cannonball law
+with caller-supplied Sun geometry. The existing SPICE-backed `computeAcceleration`
+methods remain available; `evaluate` adds analytic partials using the same force
+law. Compose forces and partials together so the trajectory and covariance always
+use the same dynamics. Pure geometry kernels are separate from SPICE wrappers.
+
+For eight states, the adapter uses the existing `ClockModel` for exact bias/
+frequency propagation, clock STM, and clock process covariance. Orbital and clock
+process noises are independent in this adapter; the EKF still propagates their
+estimated cross covariance. A custom propagation callback may supply coupled
+dynamics/noise if required.
+
+`geometricRadiometricPrediction` supplies simultaneous-epoch range and instantaneous
+range-rate with analytic partials, in km and km/s. For eight states, uplink adds
+`c (b_sc - b_ground)` and `c (y_sc - y_ground)`; downlink reverses these clock terms.
+The station state must share the spacecraft's frame, origin and epoch. The six-state
+layout assumes zero spacecraft clock errors; known ground clock terms may still
+be supplied. This is a **controlled benchmark model**, without light-time,
+Shapiro, media corrections or finite Doppler count time. The existing synthetic
+Voyager report uses a different observation model and must not be passed to this
+adapter as though the models were interchangeable.
+
+Basic setup (the caller provides an initial state/covariance and current measurements):
+
+```cpp
+#include "filters/EKF.hpp"
+#include "filters/CartesianPropagator.hpp"
+#include "perturbations/Gravitational.hpp"
+
+fd::filters::EKF ekf(fd::filters::StateLayout::OrbitClock);
+ekf.setInitialState(x0, P0, t0); // x0 has 8 components; P0 is 8 x 8.
+fd::filters::CartesianPropagationConfig config;
+config.clock = clockParameters;
+const fd::filters::CartesianPropagator propagate(
+    fd::perturbations::pointMassGravity(mu), config);
+ekf.predictTo(t1, propagate);
+const auto diagnostics = ekf.update(t1, observed, R, measurementModel);
+```
+
+The `deepnav_clocks` CMake library packages the existing clock module and links
+only Eigen. `deepnav_ekf` links Eigen and `deepnav_clocks`, with RKF45 and
+geometry-only perturbation/shadow kernels. It can be linked by numerical
+clients without inheriting CSPICE or graphics linkage, although top-level project
+configuration still requires those dependencies.
+The EKF modules are also available through `big_functions`.
+
+#### Validation and single-run plots
+
+Build and run from the repository root:
+
+```sh
+cmake --build build-clang --target test_ekf test_perturbation_models test_spice_environment ekf_demo -j4
+ctest --test-dir build-clang -R '^test_(ekf|perturbation_models|spice_environment)$' --output-on-failure
+./build-clang/ekf_demo
+python3 tests/plot_ekf.py --no-show
+```
+
+The demo runs both layouts by default; `--states 6` or `--states 8` selects one.
+`--output DIR` changes its output directory; pass the same directory to the
+plotter with `--input DIR`. Omit `--no-show` to display interactive Matplotlib
+windows, or change the illustrative accuracy line with `--threshold-km VALUE`.
+Plotting requires NumPy and Matplotlib.
+
+The seeded example starts from an inclined, initially circular Earth orbit of
+20,000 km radius and runs for eight hours, beginning at `2024-03-20T00:00:00`.
+Use `--start-utc '2024-03-21T00:00:00'` to change the epoch, and `--kernels DIR`
+to change the local kernel directory (default: this checkout's `Kernels/`).
+`SpiceEarthEnvironment` loads the leap-second, planetary constants, DE442,
+gravity constants, DSN station SPK, Earth orientation BPC and ITRF93 frame
+kernels. Missing files or epoch coverage produce errors rather than substituted
+geometry. The kernels use their existing filenames; see
+`src/dynamics/SpiceEarthEnvironment.cpp` for the load list. Kernel access uses
+CSPICE's process-global pool and must not run concurrently in multiple threads.
+
+By default, truth and estimator both use Earth point-mass gravity, solar
+third-body gravity and eclipse-modulated SRP (`Cr=1.3`, area 20 m^2, mass 1,000 kg).
+Sun positions are geometric Earth-relative J2000 states from CSPICE at each
+integration stage. The shadow module evaluates angular solar/body disk overlap
+using spherical bodies, a uniform solar disk, and Earth's kernel equatorial
+radius. Illumination is 1 in sunlight, 0 in umbra, and fractional in penumbra.
+The shadowed SRP Jacobian includes the analytic angular-disk illumination gradient
+in addition to the analytic unshadowed SRP gradient.
+Truth uses its own position and the filter uses its estimate for eclipse geometry.
+This is an angular-disk approximation: Earth oblateness, limb darkening,
+atmospheric refraction, lunar occultations and lunar gravity are omitted.
+RKF45's maximum step is 10 s to resolve penumbra transitions; diagnostics remain
+sampled every 60 s and can miss brief partial-eclipse intervals. The perturbed
+trajectory is not an exact circular orbit. Use `--two-body` for an Earth-only
+force baseline (stations and diagnostic eclipse geometry still use CSPICE),
+preferably with `--output 'Output EKF/two_body'` to retain both scenarios.
+`scenario.json` records the epoch, forces, stations, clock configuration and seeds.
+
+DSS-43, DSS-63 and DSS-14 are selected by elevation above 10 degrees. Their full
+Earth-relative J2000 position/velocity states come from the DSN station SPK and
+Earth-orientation kernels; visibility uses the geodetic up direction transformed
+from ITRF93. This uses `spkezr_c` with `NONE`, keeping station geometry simultaneous
+with the simplified measurements; it does not introduce light-time corrections.
+See the [NAIF state documentation](https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/cspice/spkezr_c.html).
+Measurements have 10 m range noise and 0.1 mm/s instantaneous range-rate noise,
+sampled every 60 s. These are benchmark assumptions, not a mission link budget.
+Scheduled tracking gaps are 2-4 h and 6-7 h. The "continuous" comparison uses every
+visible opportunity and may still have visibility gaps. The paired schedules
+share the same truth and measurement-noise realizations. Eclipse does not disable
+radio tracking; solar illumination and station visibility are separate quantities.
+
+The eight-state case uses an ideally referenced ground clock and
+`DSAC::shortTermWhiteFmBaseline()`. `ClockTruthSimulator::step()` owns stochastic
+clock truth, including deterministic drift, white frequency noise and any configured
+random-walk frequency contribution. The EKF's Cartesian adapter uses `ClockModel`
+with the same DSAC parameters for exact mean, transition and process covariance;
+clock correction occurs jointly with the orbit in the radiometric update.
+No clock propagation or diffusion constants are duplicated in the demo.
+The baseline remains a DSAC-inspired short-term white-FM continuation, not a
+hardware fit or a validated long-term stability model. The six-state case has an
+ideal spacecraft clock.
+
+`Output EKF/` stores four CSVs (`ekf_6_continuous.csv`, `ekf_6_gaps.csv`, and their
+eight-state counterparts) and plots of component state errors with +/-3 sigma,
+clock errors, position-error norm against the continuous comparison, pre-update
+innovations and their uncertainty, and eclipse flags/illumination for truth and
+estimated geometry. The eclipse plots replace the autocorrelation plots; the
+plotter removes those superseded PNGs when regenerating the output folder.
+Green plot bands denote epochs with measurements. Signed errors are estimate
+minus truth. CSVs include component sigmas, innovation covariance diagonal,
+whitened innovations, NIS, illumination fractions and eclipse codes
+(`0=sunlit`, `1=penumbra`, `2=umbra`); missing innovations are `nan`. The station
+column indexes the station list in `scenario.json`, or is -1 without tracking.
+The position plot's `3 sqrt(lambda_max(Prr))` is an uncertainty reference, not a
+calibrated probability bound for the 3D error norm.
+
+`test_ekf` checks analytic free-motion state/STM/noise propagation, a linear Kalman
+reference with correlated observations, invariance under measurement permutation,
+exact clock propagation and small clock diffusion, cross covariance, mixed-unit
+updates, circular two-body propagation, finite-difference STM/radiometric partials,
+noise maximum-step agreement, noiseless sequential orbit/clock recovery after a
+tracking gap, NIS rejection, semidefinite priors, and invalid inputs without
+filter-state mutation.
+
+`test_perturbation_models` verifies SRP direction, SI/km units and inverse-square
+scaling, independent third-body acceleration, finite-difference analytic force
+partials, force composition, the STM with SRP, and nonlinear process covariance
+composition across adjacent intervals, sunlight/umbra/penumbra classification,
+independent solar-disk ray/sphere shadow checks, penumbra SRP partials, eclipse
+maximum-step convergence and the STM across an eclipse transition.
+`test_spice_environment` verifies kernel epoch/constants, moving Sun geometry,
+DSN position/velocity against a full frame transformation and numerical position
+derivatives, geodetic station normals, and explicit errors outside coverage.
+The existing `test_synth_observations`
+also exercises the retained SPICE force interfaces.
+
+Ensemble runners and NEES/NIS consistency studies are reserved for the separate
+`montecarlo/` directory. They are not implemented in this first version. The
+single-run figures do not establish statistical consistency, minimum tracking
+hours or DSAC cost savings. Full Voyager EKF integration, retarded-time uplink
+measurements with clock/count-time handling, a coherent two-way baseline, and
+force-model mismatch studies remain subsequent work. The design follows the
+covariance, measurement-processing and bias-modeling guidance in NASA
+*Navigation Filter Best Practices*, second edition, NASA/TP-2018-219822/Revision
+(March 2025).
+
 ### Synthetic Observations
 
 Synthetic observation classes live under `fd::observations::synth`.
@@ -1081,6 +1316,13 @@ a_3rd = mu_i * (r_sc_to_i / |r_sc_to_i|^3 - r_central_to_i / |r_central_to_i|^3)
 - anti-sunward direction
 - configurable `C_R`, area, and mass
 - returns `km/s^2`
+
+Both gravity and SRP expose analytic position partials through
+`AccelerationEvaluation`. Geometry-only kernels in `GravitationalModel.cpp` and
+`SRPModel.cpp` accept explicit body positions; `Gravitational.cpp` and `SRP.cpp`
+retain SPICE-backed ephemeris access and the original acceleration APIs.
+`sumAccelerations` composes acceleration and partials for EKF propagation without
+duplicating force equations in the filter.
 
 ## Units
 
