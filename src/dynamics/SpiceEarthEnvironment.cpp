@@ -28,6 +28,7 @@ SpiceEarthEnvironment::SpiceEarthEnvironment(const std::filesystem::path& direct
         }
         earthMu_ = bodyConstant("EARTH", "GM");
         sunMu_ = bodyConstant("SUN", "GM");
+        moonMu_ = bodyConstant("MOON", "GM");
         earthRadius_ = bodyConstant("EARTH", "RADII");
         sunRadius_ = bodyConstant("SUN", "RADII");
     } catch (...) {
@@ -58,6 +59,22 @@ Eigen::Vector3d SpiceEarthEnvironment::sunPosition(double epoch) const {
     spkpos_c("SUN", epoch, "J2000", "NONE", "EARTH", position, &lightTime);
     od::throwIfSpiceFailed("Cannot evaluate Earth-Sun geometry");
     return Eigen::Map<Eigen::Vector3d>(position);
+}
+
+Eigen::Vector3d SpiceEarthEnvironment::moonPosition(double epoch) const {
+    od::SpiceErrorModeGuard guard;
+    SpiceDouble position[3], lightTime;
+    spkpos_c("MOON", epoch, "J2000", "NONE", "EARTH", position, &lightTime);
+    od::throwIfSpiceFailed("Cannot evaluate Earth-Moon geometry");
+    return Eigen::Map<Eigen::Vector3d>(position);
+}
+
+Eigen::Vector3d SpiceEarthEnvironment::earthPole(double epoch) const {
+    od::SpiceErrorModeGuard guard;
+    SpiceDouble rotation[3][3];
+    pxform_c("ITRF93", "J2000", epoch, rotation);
+    od::throwIfSpiceFailed("Cannot transform Earth J2 pole");
+    return {rotation[0][2], rotation[1][2], rotation[2][2]};
 }
 
 CartesianState SpiceEarthEnvironment::stationState(const od::Station& station, double epoch) const {

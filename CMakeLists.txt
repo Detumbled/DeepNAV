@@ -153,6 +153,7 @@ set(EKF_SOURCES
     src/perturbations/GravitationalModel.cpp
     src/perturbations/SRPModel.cpp
     src/perturbations/Eclipse.cpp
+    src/perturbations/J2.cpp
 )
 
 # Reusable numerical filtering target without CSPICE or graphics linkage.
@@ -170,6 +171,7 @@ set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     src/dynamics/SpiceInterpolator.cpp
     src/dynamics/ConstantStateProvider.cpp
     src/dynamics/SpiceEarthEnvironment.cpp
+    src/simulation/EarthOrbitScenario.cpp
     src/dynamics/LinearStateProvider.cpp
     src/filters/filter.cpp
     src/filters/WLS.cpp
@@ -238,6 +240,7 @@ set(APP_SOURCE_CANDIDATES
     tests/test_ekf.cpp
     tests/test_perturbation_models.cpp
     tests/test_spice_environment.cpp
+    tests/test_earth_orbit_scenario.cpp
     ekf_demo.cpp
 
     tests/Optical/test_opnav_geometry.cpp
@@ -254,7 +257,8 @@ foreach(app_src IN LISTS APP_SOURCES)
     get_filename_component(app_name "${app_src}" NAME_WE)
     add_executable(${app_name} "${app_src}")
 
-    if(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "test_spice_environment")
+    if(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "test_spice_environment"
+       OR app_name STREQUAL "test_earth_orbit_scenario")
         target_link_libraries(${app_name} PRIVATE big_functions)
         target_compile_definitions(${app_name} PRIVATE
             DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

@@ -4,8 +4,8 @@ DeepNAV is an orbit-determination and flight-dynamics sandbox for DSN/Voyager
 tracking work.
 The current implementation is centered on C++/Eigen numerical utilities,
 CSPICE-backed station geometry, synthetic observations, perturbation models,
-batch weighted least-squares filtering, and an initial optical-navigation
-geometry and camera-model layer.
+batch weighted least-squares and sequential Extended Kalman filtering, clock
+simulation, and an initial optical-navigation geometry and camera-model layer.
 
 ## Current Scope
 
@@ -21,7 +21,8 @@ Implemented modules:
 - Synthetic one-way range, range-rate, and VLBI differential range observations.
 - Interchangeable propagated-ephemeris and direct-CSPICE target-state sources.
 - Solar Shapiro delay applied to synthetic radiometric observables.
-- Modular perturbation models for third-body gravity and cannonball SRP.
+- Modular Earth J2, solar/lunar third-body gravity, eclipse-modulated cannonball
+  SRP, and controlled SRP/clock model-mismatch comparisons.
 - A reusable Cartesian state type and simultaneous-epoch geometric
   camera-to-target line of sight, independent of CSPICE.
 - Iterative light-time and first-order stellar aberration for body targets,
@@ -41,7 +42,8 @@ Planned or partial areas:
 
 - Promotion of the estimator's computed-observation and dynamics code from the
   Voyager test into reusable library modules.
-- Complete mission-specific force configurations, eclipse modelling, and future force models.
+- Complete mission-specific force configurations, higher gravity harmonics, and
+  refined eclipse geometry.
 - Voyager sequential-OD integration, retarded-time uplink/clock observation
   models, and ensemble consistency/tracking-budget studies.
 - Optical star catalogs, limb/terminator and landmark geometry,
@@ -51,151 +53,6 @@ Planned or partial areas:
 Longer-term directions include nonlinear optimization for trajectory and
 maneuver design, plus multi-agent spaceborne/ground antenna tracking. CppAD,
 IFOPT, and IPOPT are not yet wired into the current CMake build.
-
-## Repository Layout
-
-The active library and test modules wired into CMake are:
-
-```text
-include/
-  Clocks/
-    Types.hpp
-    Clocks.hpp
-    ClockHistory.hpp
-    ClockModel.hpp
-    LocalOscillator.hpp
-    DSAC.hpp
-    ClockTruthSimulator.hpp
-    Allan.hpp
-    Calibration.hpp
-  DP853Integrator.hpp
-  RKF45Integrator.hpp
-  dynamics/
-    CartesianState.hpp
-    EphemerisInterpolator.hpp
-    SpiceInterpolator.hpp
-  opnav/
-    CameraModel.hpp
-    CameraAttitude.hpp
-    DistortionModel.hpp
-    Types.hpp
-    core/
-      GeometricLineOfSight.hpp
-      LightTimeSolver.hpp
-      ApparentDirection.hpp
-    image/
-      CircularGaussian.hpp
-      CentroidEstimator.hpp
-      PhotocenterCorrection.hpp
-  stations/
-    ElevationMask.hpp
-    StationCatalog.hpp
-    Stations.hpp
-  filters/
-    EKFTypes.hpp
-    EKF.hpp
-    CartesianPropagator.hpp
-    BatchLeastSquaresDriver.hpp
-    filter.hpp
-    WLS.hpp
-  observations/synth/
-    obs_synth.hpp
-    RangeSynth.hpp
-    RangeRateSynth.hpp
-    TargetStateProvider.hpp
-    VLBISynth.hpp
-  observations/
-    GeometricRadiometricModel.hpp
-  perturbations/
-    ForceModel.hpp
-    Gravitational.hpp
-    SRP.hpp
-    Shapiro.hpp
-  utils/
-    ClockCsvWriter.hpp
-    CSPICE/
-      SpiceError.hpp
-      SpiceErrorModeGuard.hpp
-
-src/
-  Clocks/
-    Clocks.cpp
-    ClockHistory.cpp
-    ClockModel.cpp
-    LocalOscillator.cpp
-    DSAC.cpp
-    ClockTruthSimulator.cpp
-    Allan.cpp
-    Calibration.cpp
-    Validation.hpp
-  utils/
-    ClockCsvWriter.cpp
-  RKF45Integrator.cpp
-  dynamics/
-    EphemerisInterpolator.cpp
-    SpiceInterpolator.cpp
-  opnav/
-    CameraModel.cpp
-    CameraAttitude.cpp
-    DistortionModel.cpp
-    core/
-      GeometricLineOfSight.cpp
-      LightTimeSolver.cpp
-      ApparentDirection.cpp
-    image/
-      CircularGaussian.cpp
-      CentroidEstimator.cpp
-      PhotocenterCorrection.cpp
-  stations/
-    ElevationMask.cpp
-    StationCatalog.cpp
-  filters/
-    EKF.cpp
-    CartesianPropagator.cpp
-    BatchLeastSquaresDriver.cpp
-    filter.cpp
-    WLS.cpp
-  observations/synth/
-    obs_synth.cpp
-    RangeSynth.cpp
-    RangeRateSynth.cpp
-    TargetStateProvider.cpp
-    VLBISynth.cpp
-  observations/
-    GeometricRadiometricModel.cpp
-  perturbations/
-    ForceModel.cpp
-    Gravitational.cpp
-    GravitationalModel.cpp
-    SRP.cpp
-    SRPModel.cpp
-
-tests/
-  test_ekf.cpp
-  test_perturbation_models.cpp
-  plot_ekf.py
-  test_clocks.cpp
-  test_clock_history.cpp
-  test_plot_clocks.py
-plot_centroid_demo.py
-  test_ephemeris_interpolator.cpp
-  test_geometric_line_of_sight.cpp
-  test_optical.cpp
-  test_apparent_direction.cpp
-  test_centroid_estimator.cpp
-  test_synth_observations.cpp
-  test_synth_source_comparison.cpp
-  test_voyager_position_od.cpp
-
-test_rkf45.cpp
-test_stations.cpp
-station_catalog_demo.cpp
-ekf_demo.cpp
-montecarlo/
-  README.md
-kernels.tm
-plot_clocks.py
-```
 
 ## Dependencies
 
@@ -1121,8 +978,8 @@ The EKF modules are also available through `big_functions`.
 Build and run from the repository root:
 
 ```sh
-cmake --build build-clang --target test_ekf test_perturbation_models test_spice_environment ekf_demo -j4
-ctest --test-dir build-clang -R '^test_(ekf|perturbation_models|spice_environment)$' --output-on-failure
+cmake --build build-clang --target test_ekf test_perturbation_models test_spice_environment test_earth_orbit_scenario ekf_demo -j4
+ctest --test-dir build-clang -R '^test_(ekf|perturbation_models|spice_environment|earth_orbit_scenario)$' --output-on-failure
 ./build-clang/ekf_demo
 python3 tests/plot_ekf.py --no-show
 ```
@@ -1144,23 +1001,43 @@ geometry. The kernels use their existing filenames; see
 `src/dynamics/SpiceEarthEnvironment.cpp` for the load list. Kernel access uses
 CSPICE's process-global pool and must not run concurrently in multiple threads.
 
-By default, truth and estimator both use Earth point-mass gravity, solar
-third-body gravity and eclipse-modulated SRP (`Cr=1.3`, area 20 m^2, mass 1,000 kg).
-Sun positions are geometric Earth-relative J2000 states from CSPICE at each
-integration stage. The shadow module evaluates angular solar/body disk overlap
+By default, truth and estimator both use Earth point-mass gravity plus J2,
+solar and lunar differential third-body gravity, and eclipse-modulated SRP
+(`Cr=1.3`, area 20 m^2, mass 1,000 kg). Sun/Moon positions are geometric
+Earth-relative J2000 states from CSPICE at each integration stage; their GM
+values come from the existing gravity-constants kernel. Differential third-body
+acceleration subtracts the perturbing body's acceleration of Earth's center.
+
+The simple, kernel-independent J2 correction is in `perturbations/J2.hpp` and
+`src/perturbations/J2.cpp`. `j2Gravity(mu, radius, J2, position, pole)` returns the
+correction acceleration and analytic position Jacobian, with zero velocity
+Jacobian. Add it to point-mass gravity; it does not include the central term.
+Inputs use km, seconds and an unnormalized dimensionless J2 coefficient, with a
+unit pole in the same frame as position. The demo uses nominal constant
+`J2=1.08262668e-3` (a declared benchmark constant, not extracted from the SPICE
+PCK), Earth's kernel equatorial radius, and the ITRF93 +Z axis transformed into
+J2000 at the current epoch. It does not assume that the Earth pole coincides
+with J2000 +Z. Higher gravity harmonics, tides and time-varying J2 are omitted.
+The separation of J2 correction from central gravity follows the usual
+[J2-only force convention](https://test.orekit.org/site-orekit-13.1.2/apidocs/org/orekit/forces/gravity/J2OnlyPerturbation.html).
+`simulation/EarthOrbitScenario` composes these forces and owns the benchmark
+model/mismatch configurations; the EKF and J2 module remain independent of the
+demo and of CSPICE. The shadow module evaluates angular solar/body disk overlap
 using spherical bodies, a uniform solar disk, and Earth's kernel equatorial
 radius. Illumination is 1 in sunlight, 0 in umbra, and fractional in penumbra.
 The shadowed SRP Jacobian includes the analytic angular-disk illumination gradient
 in addition to the analytic unshadowed SRP gradient.
 Truth uses its own position and the filter uses its estimate for eclipse geometry.
-This is an angular-disk approximation: Earth oblateness, limb darkening,
-atmospheric refraction, lunar occultations and lunar gravity are omitted.
+This is an angular-disk approximation: Earth oblateness in the shadow geometry,
+limb darkening, atmospheric refraction and lunar occultations are omitted. Earth
+oblateness is included in the gravitational force through J2.
 RKF45's maximum step is 10 s to resolve penumbra transitions; diagnostics remain
 sampled every 60 s and can miss brief partial-eclipse intervals. The perturbed
 trajectory is not an exact circular orbit. Use `--two-body` for an Earth-only
 force baseline (stations and diagnostic eclipse geometry still use CSPICE),
 preferably with `--output 'Output EKF/two_body'` to retain both scenarios.
-`scenario.json` records the epoch, forces, stations, clock configuration and seeds.
+`scenario.json` records the epoch, forces, stations, J2 convention, seeds, and
+separate truth/estimator SRP and clock parameter values.
 
 DSS-43, DSS-63 and DSS-14 are selected by elevation above 10 degrees. Their full
 Earth-relative J2000 position/velocity states come from the DSN station SPK and
@@ -1179,12 +1056,85 @@ The eight-state case uses an ideally referenced ground clock and
 `DSAC::shortTermWhiteFmBaseline()`. `ClockTruthSimulator::step()` owns stochastic
 clock truth, including deterministic drift, white frequency noise and any configured
 random-walk frequency contribution. The EKF's Cartesian adapter uses `ClockModel`
-with the same DSAC parameters for exact mean, transition and process covariance;
+with its own declared parameters for exact mean, transition and process covariance;
 clock correction occurs jointly with the orbit in the radiometric update.
 No clock propagation or diffusion constants are duplicated in the demo.
 The baseline remains a DSAC-inspired short-term white-FM continuation, not a
 hardware fit or a validated long-term stability model. The six-state case has an
 ideal spacecraft clock.
+
+#### Controlled model mismatch
+
+The default case is `--mismatch matched`. The simulated truth, initial conditions,
+clock truth seed, station selection and measurement noise remain fixed across
+cases; only estimator assumptions change. Truth and estimator use separate
+force callbacks and propagation objects. This is a deterministic sensitivity
+study, not a distribution of spacecraft parameters or a Monte Carlo run.
+The illustrative presets are:
+
+| Case | Estimator Cr scale | Estimator area/mass scale | Estimator drift offset | Estimator clock diffusion scale |
+| --- | ---: | ---: | ---: | ---: |
+| `matched` | 1 | 1 | 0 | 1 |
+| `srp` | 0.95 | 0.90 | 0 | 1 |
+| `clock` | 1 | 1 | +3e-12/day | 0.5 |
+| `combined` | 0.95 | 0.90 | +3e-12/day | 0.5 |
+
+SRP scales multiply the truth Cr and area/mass values; the area/mass change is
+implemented by changing the estimator area at fixed mass. The SRP preset
+therefore assumes 0.855 of the true effective SRP coefficient (14.5% low).
+These two parameters multiply the same cannonball force and are not separately
+identified or estimated by this 6/8-state filter.
+
+Clock drift offsets are fractional-frequency change per day, converted to
+per-second units by dividing by 86400. The clock preset is deliberately a stress
+case, not an asserted DSAC drift uncertainty: its offset is much larger than the
+baseline drift. Both clock diffusion intensities are multiplied by the noise
+scale (a variance/intensity factor, not a standard-deviation factor). The baseline
+frequency random walk is zero and remains zero when scaled. Clock mismatches
+apply only to 8-state runs; the 6-state case keeps ideal clocks. The wrong drift
+is held fixed by the estimator, and no additional state estimates it.
+
+Run isolated and combined cases, then plot the comparison:
+
+```sh
+./build-clang/ekf_demo
+./build-clang/ekf_demo --mismatch srp
+./build-clang/ekf_demo --mismatch clock
+./build-clang/ekf_demo --mismatch combined
+python3 tests/plot_ekf.py --no-show \
+  --compare 'Output EKF/srp_mismatch' \
+  --compare 'Output EKF/clock_mismatch' \
+  --compare 'Output EKF/combined_mismatch'
+```
+
+Non-matched presets default to separate `Output EKF/<case>_mismatch/` folders;
+`--output DIR` overrides the destination. Numeric overrides take precedence over
+the preset regardless of argument order:
+
+```sh
+./build-clang/ekf_demo --states 8 --mismatch clock \
+  --clock-drift-offset-per-day 3e-16 --clock-noise-scale 1 \
+  --output 'Output EKF/small_clock_mismatch'
+./build-clang/ekf_demo --srp-cr-scale 1.05 --srp-area-mass-scale 1 \
+  --output 'Output EKF/cr_only_mismatch'
+```
+
+Without an explicit destination, runs with numeric overrides use
+`Output EKF/custom_mismatch/`. Supported options are `--srp-cr-scale`,
+`--srp-area-mass-scale`, `--clock-drift-offset-per-day`, and `--clock-noise-scale`.
+Scales must be finite and nonnegative, with area/mass strictly positive; drift
+may have either sign. `--two-body` rejects SRP mismatch because SRP is disabled.
+No extra orbital process noise is inserted to conceal mismatches, and neither
+SRP parameters nor clock drift are augmented into the estimated state.
+Covariance consequently still describes the estimator's assumed model; actual
+errors can exceed its predicted uncertainty when that model is wrong.
+
+The comparison plot focuses on the final tracking outage to reveal small
+holdover differences. It shows position error and each covariance uncertainty
+reference; the 8-state figure also shows clock bias/frequency errors with each
+estimator's +/-3 sigma bands. Before comparing, the plotter requires identical
+exported truth states, observations, epochs and tracking selection. Regenerate
+older CSVs before using `--compare`, because those fields were added here.
 
 `Output EKF/` stores four CSVs (`ekf_6_continuous.csv`, `ekf_6_gaps.csv`, and their
 eight-state counterparts) and plots of component state errors with +/-3 sigma,
@@ -1193,7 +1143,8 @@ innovations and their uncertainty, and eclipse flags/illumination for truth and
 estimated geometry. The eclipse plots replace the autocorrelation plots; the
 plotter removes those superseded PNGs when regenerating the output folder.
 Green plot bands denote epochs with measurements. Signed errors are estimate
-minus truth. CSVs include component sigmas, innovation covariance diagonal,
+minus truth. CSVs include truth and estimated states, the observed range/rate,
+component sigmas, innovation covariance diagonal,
 whitened innovations, NIS, illumination fractions and eclipse codes
 (`0=sunlit`, `1=penumbra`, `2=umbra`); missing innovations are `nan`. The station
 column indexes the station list in `scenario.json`, or is -1 without tracking.
@@ -1211,22 +1162,27 @@ filter-state mutation.
 `test_perturbation_models` verifies SRP direction, SI/km units and inverse-square
 scaling, independent third-body acceleration, finite-difference analytic force
 partials, force composition, the STM with SRP, and nonlinear process covariance
-composition across adjacent intervals, sunlight/umbra/penumbra classification,
+composition across adjacent intervals, J2 equator/pole signs and normalization,
+independent potential-gradient and rotated-frame checks, secular nodal precession,
+the propagated J2 STM, sunlight/umbra/penumbra classification,
 independent solar-disk ray/sphere shadow checks, penumbra SRP partials, eclipse
 maximum-step convergence and the STM across an eclipse transition.
-`test_spice_environment` verifies kernel epoch/constants, moving Sun geometry,
+`test_spice_environment` verifies kernel epoch/constants, moving Sun/Moon geometry,
+the transformed Earth pole,
 DSN position/velocity against a full frame transformation and numerical position
 derivatives, geodetic station normals, and explicit errors outside coverage.
-The existing `test_synth_observations`
-also exercises the retained SPICE force interfaces.
+`test_earth_orbit_scenario` checks lunar force composition against the independent
+differential-gravity formula, SRP mismatch isolation, matched-force equality,
+analytic clock holdover under drift mismatch and the estimator noise scaling.
+The existing `test_synth_observations` also exercises the retained SPICE force interfaces.
 
 Ensemble runners and NEES/NIS consistency studies are reserved for the separate
 `montecarlo/` directory. They are not implemented in this first version. The
 single-run figures do not establish statistical consistency, minimum tracking
 hours or DSAC cost savings. Full Voyager EKF integration, retarded-time uplink
 measurements with clock/count-time handling, a coherent two-way baseline, and
-force-model mismatch studies remain subsequent work. The design follows the
-covariance, measurement-processing and bias-modeling guidance in NASA
+parameter estimation/noise compensation for model mismatch remain subsequent
+work. The design follows the covariance, measurement-processing and bias-modeling guidance in NASA
 *Navigation Filter Best Practices*, second edition, NASA/TP-2018-219822/Revision
 (March 2025).
 
@@ -1311,10 +1267,14 @@ comparison set is populated but does not impose accuracy thresholds.
 a_3rd = mu_i * (r_sc_to_i / |r_sc_to_i|^3 - r_central_to_i / |r_central_to_i|^3)
 ```
 
+`fd::perturbations::j2Gravity` adds a standalone J2 correction with analytic
+position partials about a caller-supplied unit pole. It excludes central gravity.
+
 `fd::perturbations::SolarRadiationPressure` computes cannonball SRP:
 
 - anti-sunward direction
 - configurable `C_R`, area, and mass
+- optional sunlight/penumbra/umbra scaling with illumination derivatives
 - returns `km/s^2`
 
 Both gravity and SRP expose analytic position partials through

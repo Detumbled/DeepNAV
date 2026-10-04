@@ -1,9 +1,12 @@
 #include "filters/CartesianPropagator.hpp"
-#include "perturbations/Gravitational.hpp"
-#include "perturbations/SRP.hpp"
 #include "perturbations/Eclipse.hpp"
+#include "perturbations/Gravitational.hpp"
+#include "perturbations/J2.hpp"
+#include "perturbations/SRP.hpp"
+#include <Eigen/Geometry>
 #include <cmath>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 
 using namespace fd::perturbations;
@@ -84,6 +87,75 @@ void forceLawsAndPartials() {
     rejects([&] { (void)sumAccelerations({AccelerationFunction{}}); });
 }
 
+void j2LawAndPropagation() {
+    constexpr double mu = 398600.4418, radius = 6378.137, j2 = 1.08262668e-3, orbitRadius = 20000;
+    const auto model = [=](double, const Eigen::Vector3d& r, const Eigen::Vector3d&) {
+        return j2Gravity(mu, radius, j2, r);
+    };
+    const double magnitude = 1.5 * j2 * mu * radius * radius / std::pow(orbitRadius, 4);
+    relativeNear(model(0, {orbitRadius, 0, 0}, {}).acceleration, Eigen::Vector3d(-magnitude, 0, 0),
+                 1e-14);
+    relativeNear(model(0, {0, 0, orbitRadius}, {}).acceleration,
+                 Eigen::Vector3d(0, 0, 2 * magnitude), 1e-14);
+    const Eigen::Vector3d position(20000, 4000, 3000);
+    checkPartials(model, position, .1);
+    // Independent potential gradient checks the sign and degree-two normalization.
+    const auto potential = [=](const Eigen::Vector3d& r) {
+        return mu * j2 * radius * radius / (2 * std::pow(r.norm(), 3)) *
+               (3 * r.z() * r.z() / r.squaredNorm() - 1);
+    };
+    Eigen::Vector3d potentialAcceleration;
+    for (int j = 0; j < 3; ++j) {
+        Eigen::Vector3d plus = position, minus = position;
+        plus[j] += 1;
+        minus[j] -= 1;
+        potentialAcceleration[j] = -(potential(plus) - potential(minus)) / 2;
+    }
+    relativeNear(model(0, position, {}).acceleration, potentialAcceleration, 1e-7);
+    const Eigen::Matrix3d rotation =
+        Eigen::AngleAxisd(.7, Eigen::Vector3d(1, 2, 3).normalized()).toRotationMatrix();
+    const auto rotated =
+        j2Gravity(mu, radius, j2, rotation * position, rotation * Eigen::Vector3d::UnitZ());
+    relativeNear(rotated.acceleration, rotation * model(0, position, {}).acceleration, 1e-14);
+    relativeNear(rotated.positionJacobian,
+                 rotation * model(0, position, {}).positionJacobian * rotation.transpose(), 1e-14);
+    require(j2Gravity(mu, radius, 0, position).acceleration.isZero() &&
+                j2Gravity(mu, radius, 0, position).positionJacobian.isZero(),
+            "Zero J2 must vanish.");
+    rejects([&] { (void)j2Gravity(mu, radius, j2, Eigen::Vector3d::Zero()); });
+    rejects([&] { (void)j2Gravity(mu, radius, j2, position, {0, 0, 2}); });
+
+    fd::filters::CartesianPropagationConfig config;
+    config.integrator.absoluteTolerance = config.integrator.relativeTolerance = 1e-12;
+    config.integrator.maximumStep = 60;
+    const fd::filters::CartesianPropagator propagate(
+        sumAccelerations({pointMassGravity(mu), model}), config);
+    constexpr double inclination = .6;
+    const double speed = std::sqrt(mu / orbitRadius), meanMotion = speed / orbitRadius;
+    Eigen::VectorXd initial(6);
+    initial << orbitRadius, 0, 0, 0, speed * std::cos(inclination), speed * std::sin(inclination);
+    const double duration = 4 * std::numbers::pi / meanMotion;
+    const auto result = propagate(0, duration, initial);
+    const Eigen::Vector3d angularMomentum =
+        result.state.head<3>().cross(result.state.segment<3>(3));
+    const double node = std::atan2(angularMomentum.x(), -angularMomentum.y());
+    const double secularNode = -1.5 * meanMotion * j2 * std::pow(radius / orbitRadius, 2) *
+                               std::cos(inclination) * duration;
+    require(std::abs(node / secularNode - 1) < .02,
+            "J2 nodal precession disagrees with secular theory.");
+    const auto shortArc = propagate(0, 600, initial);
+    Eigen::Matrix<double, 6, 6> numeric;
+    for (int j = 0; j < 6; ++j) {
+        const double step = j < 3 ? .1 : 1e-4;
+        Eigen::VectorXd plus = initial, minus = initial;
+        plus[j] += step;
+        minus[j] -= step;
+        numeric.col(j) =
+            (propagate(0, 600, plus).state - propagate(0, 600, minus).state) / (2 * step);
+    }
+    relativeNear(shortArc.transition, numeric, 1e-7);
+}
+
 void propagatedPartialsAndNoise() {
     const Eigen::Vector3d sun(SolarRadiationPressure::kAu_km, 0, 0);
     const SolarRadiationPressure srp("EARTH", "J2000", 1.3, 20, 1000);
@@ -127,8 +199,8 @@ void eclipseGeometryAndPropagation() {
     constexpr double earthRadius = 6378.137, sunRadius = 695700;
     const auto lit = evaluateEclipse({20000, 0, 0}, sun, earthRadius, sunRadius);
     const auto dark = evaluateEclipse({-20000, 0, 0}, sun, earthRadius, sunRadius);
-    require(lit.illumination == 1 && lit.flag == EclipseFlag::Sunlit &&
-                dark.illumination == 0 && dark.flag == EclipseFlag::Umbra,
+    require(lit.illumination == 1 && lit.flag == EclipseFlag::Sunlit && dark.illumination == 0 &&
+                dark.flag == EclipseFlag::Umbra,
             "Sunlit/umbra classification failed.");
     double low = 6200, high = 6550;
     for (int i = 0; i < 40; ++i) {
@@ -157,9 +229,9 @@ void eclipseGeometryAndPropagation() {
                 ray = std::cos(angularRadius * diskRadius) * axis +
                       std::sin(angularRadius * diskRadius) * (x * u + y * v) / diskRadius;
             const double distanceAlongRay = -edge.dot(ray);
-            const bool blocked = distanceAlongRay > 0 &&
-                                 edge.squaredNorm() - distanceAlongRay * distanceAlongRay <
-                                     earthRadius * earthRadius;
+            const bool blocked =
+                distanceAlongRay > 0 && edge.squaredNorm() - distanceAlongRay * distanceAlongRay <
+                                            earthRadius * earthRadius;
             illuminated += !blocked;
             ++total;
         }
@@ -169,8 +241,7 @@ void eclipseGeometryAndPropagation() {
     const auto radiation = [=](double, const Eigen::Vector3d& r, const Eigen::Vector3d&) {
         return srp.evaluateWithShadow(r, sun, earthRadius, sunRadius);
     };
-    require(radiation(0, {-20000, 0, 0}, {}).acceleration.isZero(),
-            "SRP must vanish in umbra.");
+    require(radiation(0, {-20000, 0, 0}, {}).acceleration.isZero(), "SRP must vanish in umbra.");
     relativeNear(radiation(0, {20000, 0, 0}, {}).acceleration,
                  srp.evaluateAtSunPosition({20000, 0, 0}, sun).acceleration, 1e-14);
     checkPartials(radiation, edge, .01);
@@ -203,6 +274,7 @@ void eclipseGeometryAndPropagation() {
 int main() {
     try {
         forceLawsAndPartials();
+        j2LawAndPropagation();
         propagatedPartialsAndNoise();
         eclipseGeometryAndPropagation();
         std::cout

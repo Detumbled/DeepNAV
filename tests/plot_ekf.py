@@ -125,20 +125,69 @@ def eclipse_flags(data, n, output, scenario):
            output / f"ekf_{n}_eclipse_flags.png", scenario)
 
 
+def model_comparison(baseline, n, directories, output, baseline_metadata):
+    cases = [(baseline_metadata.get("scenario_label", "baseline"), baseline)]
+    # A comparison must isolate estimator assumptions, with identical truth and measurements.
+    keys = (["time_s", "tracking", "station", "observed_range_km", "observed_rate_km_s"]
+            + [f"truth_{j}" for j in range(n)])
+    for directory in directories:
+        path = directory / f"ekf_{n}_gaps.csv"
+        if not path.exists():
+            raise ValueError(f"Missing comparison run: {path}")
+        data = load(path)
+        metadata = json.loads((directory / "scenario.json").read_text())
+        if not all(key in baseline.dtype.names and key in data.dtype.names and
+                   np.array_equal(baseline[key], data[key], equal_nan=True) for key in keys):
+            raise ValueError(f"Comparison truth, epoch, tracking or observations differ: {directory}")
+        cases.append((metadata.get("scenario_label", directory.name), data))
+
+    tracking = baseline["tracking"].astype(bool)
+    last_contact = baseline["time_s"][tracking][-1]
+    fig, axes = plt.subplots(3 if n == 8 else 1, 1, figsize=(11, 8 if n == 8 else 4),
+                             sharex=True, layout="constrained", squeeze=False)
+    axes = axes[:, 0]
+    for (label, data), color in zip(cases, plt.get_cmap("tab10").colors * 2):
+        coast = data["time_s"] >= last_contact
+        time = data["time_s"][coast] / 3600
+        axes[0].plot(time, data["position_error_km"][coast] * 1000, color=color, label=label)
+        axes[0].plot(time, data["position_bound_3sigma_km"][coast] * 1000, color=color, ls=":", alpha=.7)
+        if n == 8:
+            for axis, j, scale in zip(axes[1:], [6, 7], [1e9, 1e14]):
+                axis.plot(time, data[f"error_{j}"][coast] * scale, color=color)
+                sigma = data[f"sigma_{j}"][coast] * scale
+                axis.fill_between(time, -3 * sigma, 3 * sigma, color=color, alpha=.08)
+    axes[0].set_ylabel("Position error / uncertainty [m]")
+    axes[0].set_yscale("log")
+    axes[0].legend(fontsize=8)
+    axes[0].set_title("Solid: actual error norm • dotted: 3√λmax(Prr) uncertainty reference", fontsize=10)
+    if n == 8:
+        axes[1].set_ylabel("Clock bias error [ns]")
+        axes[2].set_ylabel("Frequency error [×10⁻¹⁴]")
+        axes[1].set_title("Clock shading: each estimator's ±3σ • illustrative parameter mismatches", fontsize=10)
+    finish(fig, axes, f"{n}-state EKF • model mismatch during the final tracking outage",
+           output / f"ekf_{n}_model_comparison.png", baseline_metadata.get("force_model", ""))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("Output EKF"))
     parser.add_argument("--threshold-km", type=float, default=1.0)
     parser.add_argument("--no-show", action="store_true")
+    parser.add_argument("--compare", type=Path, action="append", default=[],
+                        help="Mismatch output folder; repeat to compare cases against --input")
     args = parser.parse_args()
     if not np.isfinite(args.threshold_km) or args.threshold_km <= 0:
         parser.error("--threshold-km must be positive and finite")
     found = False
+    compared = False
     scenario = ""
+    metadata = {}
     metadata_path = args.input / "scenario.json"
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text())
         scenario = f"{metadata['integrator']} • {metadata['force_model']}"
+        if metadata.get("scenario_label"):
+            scenario += f" • {metadata['scenario_label']}"
     for n in [6, 8]:
         path = args.input / f"ekf_{n}_gaps.csv"
         if not path.exists():
@@ -151,10 +200,18 @@ def main():
         position_accuracy(data, continuous, n, args.threshold_km, args.input, scenario)
         innovations(data, n, args.input, scenario)
         eclipse_flags(data, n, args.input, scenario)
+        if args.compare and all((directory / f"ekf_{n}_gaps.csv").exists() for directory in args.compare):
+            try:
+                model_comparison(data, n, args.compare, args.input, metadata)
+            except ValueError as error:
+                parser.error(str(error))
+            compared = True
         # Retire the superseded diagnostic when regenerating an existing output folder.
         (args.input / f"ekf_{n}_innovation_autocorrelation.png").unlink(missing_ok=True)
     if not found:
         parser.error(f"No EKF gap-run CSVs in {args.input}; run ekf_demo first")
+    if args.compare and not compared:
+        parser.error("No state layout is shared by --input and every --compare folder")
     if args.no_show:
         plt.close("all")
     else:

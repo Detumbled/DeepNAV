@@ -23,6 +23,14 @@ int main() {
         require((environment.sunPosition(epoch + 28800) - environment.sunPosition(epoch)).norm() >
                     100000,
                 "Solar ephemeris is not advancing.");
+        const auto moon = environment.moonPosition(epoch);
+        require(environment.moonMu() > 4900 && environment.moonMu() < 4910 &&
+                    moon.norm() > 300000 && moon.norm() < 450000 &&
+                    (environment.moonPosition(epoch + 28800) - moon).norm() > 10000,
+                "Lunar constants/ephemeris have invalid origin, units or time dependence.");
+        const auto pole = environment.earthPole(epoch);
+        require(std::abs(pole.norm() - 1) < 1e-12 && pole.z() > .999,
+                "J2 pole is not a unit Earth pole in J2000.");
         for (const char* name : {"DSS-43", "DSS-63", "DSS-14"}) {
             const auto station =
                 od::buildStationFromKernel(name, od::stationNaifIdFromName(name), epoch);

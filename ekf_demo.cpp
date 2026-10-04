@@ -5,16 +5,15 @@
 #include "filters/EKF.hpp"
 #include "observations/GeometricRadiometricModel.hpp"
 #include "perturbations/Eclipse.hpp"
-#include "perturbations/Gravitational.hpp"
-#include "perturbations/SRP.hpp"
+#include "simulation/EarthOrbitScenario.hpp"
 #include "stations/StationCatalog.hpp"
 #include <Eigen/Eigenvalues>
-#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <numbers>
 #include <random>
 #include <stdexcept>
@@ -24,38 +23,61 @@ using namespace fd::filters;
 namespace {
 constexpr double step = 60, duration = 8 * 3600;
 
-AccelerationFunction makeForces(const fd::dynamics::SpiceEarthEnvironment& environment,
-                                double startEpoch, bool twoBodyOnly) {
-    auto gravity = fd::perturbations::pointMassGravity(environment.earthMu());
-    if (twoBodyOnly)
-        return gravity;
-    const fd::perturbations::SolarRadiationPressure srp("EARTH", "J2000", 1.3, 20, 1000);
-    return [&, startEpoch, gravity, srp](double elapsed, const Eigen::Vector3d& position,
-                                         const Eigen::Vector3d& velocity) {
-        const auto sun = environment.sunPosition(startEpoch + elapsed);
-        auto force = gravity(elapsed, position, velocity);
-        const auto tidal = fd::perturbations::thirdBodyGravity(environment.sunMu(), position, sun);
-        const auto radiation = srp.evaluateWithShadow(position, sun, environment.earthRadius(),
-                                                      environment.sunRadius());
-        force.acceleration += tidal.acceleration + radiation.acceleration;
-        force.positionJacobian += tidal.positionJacobian + radiation.positionJacobian;
-        return force;
-    };
+void writeModel(std::ostream& output, const fd::simulation::EarthOrbitModel& model) {
+    output << "{\"srp_cr\": " << model.srpCr << ", \"srp_area_m2\": " << model.srpAreaM2
+           << ", \"srp_mass_kg\": " << model.srpMassKg
+           << ", \"clock_drift_per_s\": " << model.clock.frequency_drift_per_s
+           << ", \"clock_q_bias_s\": " << model.clock.q_bias_s
+           << ", \"clock_q_frequency_per_s\": " << model.clock.q_frequency_per_s << '}';
+}
+
+void writeMetadata(const std::filesystem::path& output, double startEpoch, bool twoBodyOnly,
+                   const std::string& label, const fd::simulation::EarthOrbitModel& truth,
+                   const fd::simulation::EarthOrbitModel& estimate) {
+    std::ofstream metadata(output / "scenario.json");
+    metadata
+        << std::setprecision(17) << "{\n  \"integrator\": \"RKF45\",\n  \"force_model\": \""
+        << (twoBodyOnly ? "Earth point mass" : "Earth + J2 + Sun/Moon gravity + shadowed SRP")
+        << "\",\n  \"scenario_label\": \"" << label << "\",\n  \"start_epoch_tdb\": " << startEpoch
+        << ",\n  \"earth_j2\": " << (twoBodyOnly ? 0 : fd::simulation::kNominalEarthJ2)
+        << ",\n  \"j2_pole_frame\": \"ITRF93 transformed to J2000\",\n"
+        << "  \"sun_moon_geometry\": \"CSPICE DE442, geometric Earth-relative J2000\",\n"
+        << "  \"stations\": [\"DSS-43\", \"DSS-63\", \"DSS-14\"],\n"
+        << "  \"eclipse_model\": \"Spherical angular-disk overlap, Earth equatorial radius\",\n"
+        << "  \"clock_configuration\": \"DSAC-inspired baseline; mismatches are illustrative\",\n"
+        << "  \"clock_applies_to\": \"8-state only; 6-state clocks are ideal\",\n"
+        << "  \"clock_truth_seed\": 2027,\n  \"measurement_seed\": 2026,\n"
+        << "  \"truth_model\": ";
+    writeModel(metadata, truth);
+    metadata << ",\n  \"estimator_model\": ";
+    writeModel(metadata, estimate);
+    metadata << "\n}\n";
+    if (!metadata)
+        throw std::runtime_error("Cannot write EKF scenario metadata.");
 }
 
 void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly,
          const fd::dynamics::SpiceEarthEnvironment& environment, double startEpoch,
-         const std::vector<od::Station>& stations) {
+         const std::vector<od::Station>& stations,
+         const fd::simulation::EarthOrbitModel& truthModel,
+         const fd::simulation::EarthOrbitModel& estimateModel) {
     constexpr double radius = 20000, rad = std::numbers::pi / 180;
-    const auto clock = fd::clocks::DSAC::shortTermWhiteFmBaseline();
+    const auto clock = fd::clocks::DSAC::fromParameters(truthModel.clock);
     fd::clocks::ClockTruthSimulator clockTruth(clock, 2027);
     CartesianPropagationConfig config;
     config.integrator.absoluteTolerance = 1e-11;
     config.integrator.relativeTolerance = 1e-11;
     config.integrator.initialStep = 30;
     config.integrator.maximumStep = 10; // Resolve the short penumbra transitions.
-    config.clock = clock.parameters();
-    const CartesianPropagator propagate(makeForces(environment, startEpoch, twoBodyOnly), config);
+    config.clock = estimateModel.clock;
+    const CartesianPropagator propagate(
+        fd::simulation::earthOrbitForces(environment, startEpoch, estimateModel, twoBodyOnly),
+        config);
+    auto truthConfig = config;
+    truthConfig.clock = truthModel.clock;
+    const CartesianPropagator propagateTruth(
+        fd::simulation::earthOrbitForces(environment, startEpoch, truthModel, twoBodyOnly),
+        truthConfig);
     EKF filter(n == 6 ? StateLayout::Orbit : StateLayout::OrbitClock);
     Eigen::VectorXd truth = Eigen::VectorXd::Zero(n);
     const double speed = std::sqrt(environment.earthMu() / radius);
@@ -89,17 +111,17 @@ void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly
            "illumination_estimate,eclipse_estimate,position_error_km,position_"
            "bound_3sigma_km";
     for (int j = 0; j < n; ++j)
-        csv << ",error_" << j << ",sigma_" << j;
+        csv << ",error_" << j << ",sigma_" << j << ",truth_" << j << ",estimate_" << j;
     csv << ",range_innovation_km,rate_innovation_km_s,range_innovation_sigma_km,"
            "rate_innovation_"
-           "sigma_km_s,white_range,white_rate,nis\n";
+           "sigma_km_s,white_range,white_rate,nis,observed_range_km,observed_rate_km_s\n";
     std::size_t updates = 0;
     for (int k = 0; k <= static_cast<int>(duration / step); ++k) {
         const double time = k * step;
         if (k > 0) {
             // Propagate orbital truth separately so the clock simulator owns every
             // clock increment.
-            truth.head<6>() = propagate(time - step, time, truth.head<6>()).state;
+            truth.head<6>() = propagateTruth(time - step, time, truth.head<6>()).state;
             if (n == 8) {
                 const auto next = clockTruth.step({truth[6], truth[7]}, step);
                 truth[6] = next.bias_s;
@@ -130,11 +152,12 @@ void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly
         }
         const bool tracking = scheduled && selected >= 0;
         InnovationDiagnostics diagnostics;
+        Eigen::Vector2d observed = Eigen::Vector2d::Zero();
         if (tracking) {
             const auto model = [station](double, const Eigen::VectorXd& x) {
                 return fd::observations::geometricRadiometricPrediction(x, station);
             };
-            Eigen::Vector2d observed = model(time, truth).value;
+            observed = model(time, truth).value;
             observed += measurementNoise;
             diagnostics = filter.update(time, observed, measurementCovariance, model);
             ++updates;
@@ -155,15 +178,17 @@ void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly
             << estimatedShadow.illumination << ',' << static_cast<int>(estimatedShadow.flag) << ','
             << error.head<3>().norm() << ',' << bound;
         for (int j = 0; j < n; ++j)
-            csv << ',' << error[j] << ',' << std::sqrt(filter.covariance()(j, j));
+            csv << ',' << error[j] << ',' << std::sqrt(filter.covariance()(j, j)) << ',' << truth[j]
+                << ',' << filter.state()[j];
         if (tracking)
             csv << ',' << diagnostics.innovation[0] << ',' << diagnostics.innovation[1] << ','
                 << std::sqrt(diagnostics.covariance(0, 0)) << ','
                 << std::sqrt(diagnostics.covariance(1, 1)) << ','
                 << diagnostics.whitenedInnovation[0] << ',' << diagnostics.whitenedInnovation[1]
-                << ',' << diagnostics.normalizedInnovationSquared;
+                << ',' << diagnostics.normalizedInnovationSquared << ',' << observed[0] << ','
+                << observed[1];
         else
-            csv << ",nan,nan,nan,nan,nan,nan,nan";
+            csv << ",nan,nan,nan,nan,nan,nan,nan,nan,nan";
         csv << '\n';
     }
     if (!csv)
@@ -180,7 +205,9 @@ int main(int argc, char** argv) {
     try {
         std::filesystem::path output = "Output EKF";
         int selected = 0;
-        bool twoBodyOnly = false;
+        bool twoBodyOnly = false, outputSpecified = false;
+        std::string mismatchCase = "matched";
+        std::map<std::string, double> overrides;
         std::filesystem::path kernelDirectory =
             std::filesystem::path(DEEPNAV_SOURCE_DIR) / "Kernels";
         std::string startUtc = "2024-03-20T00:00:00";
@@ -188,13 +215,26 @@ int main(int argc, char** argv) {
             const std::string argument = argv[i];
             if (argument == "--two-body")
                 twoBodyOnly = true;
-            else if (argument == "--kernels" && i + 1 < argc)
+            else if (argument == "--mismatch" && i + 1 < argc)
+                mismatchCase = argv[++i];
+            else if ((argument == "--srp-cr-scale" || argument == "--srp-area-mass-scale" ||
+                      argument == "--clock-drift-offset-per-day" ||
+                      argument == "--clock-noise-scale") &&
+                     i + 1 < argc) {
+                const std::string value = argv[++i];
+                std::size_t consumed;
+                const double number = std::stod(value, &consumed);
+                if (consumed != value.size() || !std::isfinite(number))
+                    throw std::invalid_argument(argument + " requires a finite number.");
+                overrides[argument] = number;
+            } else if (argument == "--kernels" && i + 1 < argc)
                 kernelDirectory = argv[++i];
             else if (argument == "--start-utc" && i + 1 < argc)
                 startUtc = argv[++i];
-            else if (argument == "--output" && i + 1 < argc)
+            else if (argument == "--output" && i + 1 < argc) {
                 output = argv[++i];
-            else if (argument == "--states" && i + 1 < argc) {
+                outputSpecified = true;
+            } else if (argument == "--states" && i + 1 < argc) {
                 const std::string value = argv[++i];
                 if (value != "6" && value != "8")
                     throw std::invalid_argument("--states must be 6 or 8.");
@@ -202,8 +242,28 @@ int main(int argc, char** argv) {
             } else
                 throw std::invalid_argument(
                     "Usage: ekf_demo [--states 6|8] [--output DIR] [--two-body] "
-                    "[--kernels DIR] [--start-utc UTC]");
+                    "[--kernels DIR] [--start-utc UTC] [--mismatch matched|srp|clock|combined] "
+                    "[--srp-cr-scale X] [--srp-area-mass-scale X] "
+                    "[--clock-drift-offset-per-day X] [--clock-noise-scale X]");
         }
+        auto mismatch = fd::simulation::namedModelMismatch(mismatchCase);
+        for (const auto& [key, value] : overrides) {
+            if (key == "--srp-cr-scale")
+                mismatch.srpCrScale = value;
+            else if (key == "--srp-area-mass-scale")
+                mismatch.srpAreaMassScale = value;
+            else if (key == "--clock-drift-offset-per-day")
+                mismatch.clockDriftOffsetPerDay = value;
+            else
+                mismatch.clockNoiseScale = value;
+        }
+        if (twoBodyOnly && (mismatch.srpCrScale != 1 || mismatch.srpAreaMassScale != 1))
+            throw std::invalid_argument("SRP mismatch requires SRP forces; omit --two-body.");
+        const auto truthModel = fd::simulation::nominalEarthOrbitModel();
+        const auto estimateModel = fd::simulation::estimatorModel(truthModel, mismatch);
+        const std::string label = overrides.empty() ? mismatchCase : mismatchCase + " (custom)";
+        if (!outputSpecified && (mismatchCase != "matched" || !overrides.empty()))
+            output /= overrides.empty() ? mismatchCase + "_mismatch" : "custom_mismatch";
         const fd::dynamics::SpiceEarthEnvironment environment(kernelDirectory);
         const double startEpoch = environment.epochTdb(startUtc);
         std::vector<od::Station> stations;
@@ -214,29 +274,21 @@ int main(int argc, char** argv) {
             (void)environment.stationUp(stations.back(), startEpoch + duration);
         }
         (void)environment.sunPosition(startEpoch + duration);
+        if (!twoBodyOnly) {
+            (void)environment.moonPosition(startEpoch + duration);
+            (void)environment.earthPole(startEpoch + duration);
+        }
         std::filesystem::create_directories(output);
-        std::ofstream metadata(output / "scenario.json");
-        metadata << std::setprecision(17)
-                 << "{\n  \"integrator\": \"RKF45\",\n  \"force_model\": \""
-                 << (twoBodyOnly ? "Earth point mass"
-                                 : "Earth + Sun gravity + eclipse-modulated SRP")
-                 << "\",\n  \"start_epoch_tdb\": " << startEpoch
-                 << ",\n  \"sun_geometry\": \"CSPICE DE442, geometric J2000\",\n"
-                 << "  \"stations\": [\"DSS-43\", \"DSS-63\", \"DSS-14\"],\n"
-                 << "  \"eclipse_model\": \"Spherical angular-disk overlap, Earth "
-                    "equatorial radius\",\n"
-                 << "  \"clock_model\": \"DSAC_inspired_short_term_white_FM\",\n"
-                 << "  \"clock_truth_seed\": 2027,\n  \"measurement_seed\": 2026,\n"
-                 << "  \"srp_cr\": 1.3,\n  \"srp_area_m2\": 20,\n  "
-                    "\"srp_mass_kg\": 1000\n}\n";
-        if (!metadata)
-            throw std::runtime_error("Cannot write EKF scenario metadata.");
-        std::cout << "RKF45; " << (twoBodyOnly ? "Earth point mass" : "Earth + solar gravity + SRP")
-                  << '\n';
+        writeMetadata(output, startEpoch, twoBodyOnly, label, truthModel, estimateModel);
+        std::cout << "RKF45; "
+                  << (twoBodyOnly ? "Earth point mass" : "Earth + J2 + Sun/Moon gravity + SRP")
+                  << "; model case: " << label << '\n';
         for (int n : {6, 8})
             if (selected == 0 || selected == n) {
-                run(n, output, false, twoBodyOnly, environment, startEpoch, stations);
-                run(n, output, true, twoBodyOnly, environment, startEpoch, stations);
+                run(n, output, false, twoBodyOnly, environment, startEpoch, stations, truthModel,
+                    estimateModel);
+                run(n, output, true, twoBodyOnly, environment, startEpoch, stations, truthModel,
+                    estimateModel);
             }
         return 0;
     } catch (const std::exception& error) {
