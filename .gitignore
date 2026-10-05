@@ -20,3 +20,4 @@ AGENTS.md
 /Output_montecarlo/
 __pycache__/
 /montecarlo/data/
+/.venv-cassini/

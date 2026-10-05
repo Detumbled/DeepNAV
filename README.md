@@ -813,6 +813,32 @@ SPICE prediction is applied. The loader tests independently exercise signed
 decoding and record skipping with generated fixtures; the downloaded image is
 also checked when present, but is not required to run the tests.
 
+#### Cassini / Enceladus 3D geometry
+
+`plot_cassini_geometry.py` extracts simultaneous geometric positions from the
+dedicated `Kernels/Cassini/cassini_2004_opnav.tm` and shows Saturn, Enceladus and
+Cassini as labelled points in Saturn-centered J2000 with equal spatial scale.
+The default epoch is the image midpoint, `2004-10-10T18:13:06.046` UTC.
+
+```sh
+python3 -m venv --system-site-packages .venv-cassini
+.venv-cassini/bin/python -m pip install spiceypy plotly numpy matplotlib
+.venv-cassini/bin/python plot_cassini_geometry.py
+```
+
+The self-contained HTML viewer supports rotation, zoom and coordinate inspection.
+It also saves a PNG preview, `positions.csv` (km and km/s), and `geometry.json`
+under `Output optical/cassini_geometry/`. Use `--no-show` to generate files without
+opening a browser, `--epoch UTC` for another epoch, and `--output DIR` or
+`--kernels FILE` to override paths. The default meta-kernel is loaded relative to
+the repository root even when the script runs elsewhere.
+
+Positions use `NONE` aberration correction; the separately reported optical
+light-time uses converged reception correction `CN`. Marker sizes are symbolic.
+At the image midpoint Cassini is about 5,640,286 km from Enceladus; this is a
+snapshot of reconstructed geometry, not an estimated trajectory or an optical
+measurement prediction.
+
 ### Station Catalog
 
 `include/stations/StationCatalog.hpp` and `src/stations/StationCatalog.cpp` provide:
