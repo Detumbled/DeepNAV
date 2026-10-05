@@ -50,7 +50,7 @@ def state_errors(data, n, output, scenario):
     finish(fig, axes, f"{n}-state EKF • tracking gaps • green bands: measurements available",
            output / f"ekf_{n}_state_errors.png", scenario)
 
-    if n == 8:
+    if n >= 8:
         fig, axes = plt.subplots(2, 1, figsize=(11, 6), sharex=True, layout="constrained")
         for axis, j, scale, label in zip(axes, [6, 7], [1e9, 1e11],
                                         ["Clock bias error [ns]", "Fractional-frequency error [×10⁻¹¹]"]):
@@ -60,7 +60,7 @@ def state_errors(data, n, output, scenario):
             axis.set_ylabel(label)
         shade_tracking(axes, data)
         axes[0].legend(fontsize=8)
-        finish(fig, axes, "8-state EKF • jointly estimated clock errors", output / "ekf_8_clock_errors.png", scenario)
+        finish(fig, axes, f"{n}-state EKF • jointly estimated clock errors", output / f"ekf_{n}_clock_errors.png", scenario)
 
 
 def position_accuracy(data, continuous, n, threshold, output, scenario):
@@ -143,7 +143,7 @@ def model_comparison(baseline, n, directories, output, baseline_metadata):
 
     tracking = baseline["tracking"].astype(bool)
     last_contact = baseline["time_s"][tracking][-1]
-    fig, axes = plt.subplots(3 if n == 8 else 1, 1, figsize=(11, 8 if n == 8 else 4),
+    fig, axes = plt.subplots(3 if n >= 8 else 1, 1, figsize=(11, 8 if n >= 8 else 4),
                              sharex=True, layout="constrained", squeeze=False)
     axes = axes[:, 0]
     for (label, data), color in zip(cases, plt.get_cmap("tab10").colors * 2):
@@ -151,7 +151,7 @@ def model_comparison(baseline, n, directories, output, baseline_metadata):
         time = data["time_s"][coast] / 3600
         axes[0].plot(time, data["position_error_km"][coast] * 1000, color=color, label=label)
         axes[0].plot(time, data["position_bound_3sigma_km"][coast] * 1000, color=color, ls=":", alpha=.7)
-        if n == 8:
+        if n >= 8:
             for axis, j, scale in zip(axes[1:], [6, 7], [1e9, 1e14]):
                 axis.plot(time, data[f"error_{j}"][coast] * scale, color=color)
                 sigma = data[f"sigma_{j}"][coast] * scale
@@ -160,12 +160,66 @@ def model_comparison(baseline, n, directories, output, baseline_metadata):
     axes[0].set_yscale("log")
     axes[0].legend(fontsize=8)
     axes[0].set_title("Solid: actual error norm • dotted: 3√λmax(Prr) uncertainty reference", fontsize=10)
-    if n == 8:
+    if n >= 8:
         axes[1].set_ylabel("Clock bias error [ns]")
         axes[2].set_ylabel("Frequency error [×10⁻¹⁴]")
         axes[1].set_title("Clock shading: each estimator's ±3σ • illustrative parameter mismatches", fontsize=10)
     finish(fig, axes, f"{n}-state EKF • model mismatch during the final tracking outage",
            output / f"ekf_{n}_model_comparison.png", baseline_metadata.get("force_model", ""))
+
+
+def filter_comparison(eight, nine, output, scenario):
+    keys = (["time_s", "tracking", "station", "observed_range_km", "observed_rate_km_s"]
+            + [f"truth_{j}" for j in range(8)])
+    if not all(np.array_equal(eight[k], nine[k], equal_nan=True) for k in keys):
+        raise ValueError("8/9-state comparison requires identical truth, measurements and tracking")
+    time = eight["time_s"] / 3600
+    last = time[eight["tracking"].astype(bool)][-1]
+    fig, axes = plt.subplots(3, 1, figsize=(11, 10), layout="constrained")
+    masks = [np.ones(len(time), dtype=bool), (time >= 2) & (time < 4), time >= last]
+    for axis, mask, title in zip(axes, masks, ["Full arc", "Scheduled gap: 2–4 h",
+                                              f"After last contact: {last:.2f} h"]):
+        for n, data, color in [(8, eight, "#215b8f"), (9, nine, "#d47720")]:
+            axis.plot(time[mask], data["position_error_km"][mask] * 1000,
+                      color=color, label=f"{n} states: error norm")
+            axis.plot(time[mask], data["position_bound_3sigma_km"][mask] * 1000,
+                      color=color, ls="--", label=f"{n} states: 3√λmax(Prr)")
+        axis.set_title(title, fontsize=10)
+        axis.set_ylabel("Position [m]")
+    axes[0].set_yscale("log")
+    shade_tracking(axes[0], eight)
+    axes[0].legend(fontsize=8)
+    finish(fig, axes, "8/9-state EKF • position error and uncertainty reference • tracking gaps",
+           output / "ekf_8_9_position_accuracy.png", scenario)
+
+    fig, axes = plt.subplots(3, 1, figsize=(11, 8), sharex=True, layout="constrained")
+    for j, axis in enumerate(axes):
+        for n, data, color in [(8, eight, "#215b8f"), (9, nine, "#d47720")]:
+            axis.plot(time, data[f"error_{j}"] * 1000, color=color, label=f"{n} states: error")
+            sigma = data[f"sigma_{j}"] * 1000
+            axis.fill_between(time, -3 * sigma, 3 * sigma, color=color, alpha=.12,
+                              label=f"{n} states: ±3σ")
+        axis.set_ylabel(f"Position {'XYZ'[j]} [m]")
+        axis.set_yscale("symlog", linthresh=10)
+    shade_tracking(axes, eight)
+    axes[0].legend(fontsize=8, ncol=2)
+    finish(fig, axes, "8/9-state EKF • signed position errors and ±3σ • symmetric log scale",
+           output / "ekf_8_9_position_errors.png", scenario)
+
+
+def srp_scale(data, output, scenario):
+    time = data["time_s"] / 3600
+    fig, axis = plt.subplots(figsize=(11, 4), layout="constrained")
+    axis.plot(time, data["truth_8"], color="black", ls="--", label="Truth")
+    axis.plot(time, data["estimate_8"], color="#215b8f", label="Estimated SRP scale")
+    sigma = data["sigma_8"]
+    axis.fill_between(time, data["estimate_8"] - 3 * sigma, data["estimate_8"] + 3 * sigma,
+                      color="#215b8f", alpha=.15, label="Estimate ±3σ")
+    axis.set_ylabel("Effective SRP scale α [dimensionless]")
+    axis.legend(fontsize=8)
+    shade_tracking(axis, data)
+    finish(fig, axis, "9-state EKF • constant SRP parameter • no parameter process noise",
+           output / "ekf_9_srp_scale.png", scenario)
 
 
 def main():
@@ -188,18 +242,25 @@ def main():
         scenario = f"{metadata['integrator']} • {metadata['force_model']}"
         if metadata.get("scenario_label"):
             scenario += f" • {metadata['scenario_label']}"
-    for n in [6, 8]:
+    runs = {}
+    # The six-state implementation remains available, but is retired from these figures.
+    for path in args.input.glob("ekf_6_*.png"):
+        path.unlink()
+    for n in [8, 9]:
         path = args.input / f"ekf_{n}_gaps.csv"
         if not path.exists():
             continue
         found = True
         data = load(path)
+        runs[n] = data
         continuous_path = args.input / f"ekf_{n}_continuous.csv"
         continuous = load(continuous_path) if continuous_path.exists() else None
         state_errors(data, n, args.input, scenario)
         position_accuracy(data, continuous, n, args.threshold_km, args.input, scenario)
         innovations(data, n, args.input, scenario)
         eclipse_flags(data, n, args.input, scenario)
+        if n == 9:
+            srp_scale(data, args.input, scenario)
         if args.compare and all((directory / f"ekf_{n}_gaps.csv").exists() for directory in args.compare):
             try:
                 model_comparison(data, n, args.compare, args.input, metadata)
@@ -208,6 +269,11 @@ def main():
             compared = True
         # Retire the superseded diagnostic when regenerating an existing output folder.
         (args.input / f"ekf_{n}_innovation_autocorrelation.png").unlink(missing_ok=True)
+    if 8 in runs and 9 in runs:
+        try:
+            filter_comparison(runs[8], runs[9], args.input, scenario)
+        except ValueError as error:
+            parser.error(str(error))
     if not found:
         parser.error(f"No EKF gap-run CSVs in {args.input}; run ekf_demo first")
     if args.compare and not compared:

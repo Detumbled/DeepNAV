@@ -16,7 +16,7 @@ Implemented modules:
   interpolation.
 - Batch Weighted Least Squares filtering with a priori information and an
   iterative convergence driver.
-- Modular 6/8-state Extended Kalman filtering, Cartesian state/STM propagation,
+- Modular 6/8/9-state Extended Kalman filtering, Cartesian state/STM propagation,
   joint radiometric benchmark updates, and single-run tracking-gap diagnostics.
 - Synthetic one-way range, range-rate, and VLBI differential range observations.
 - Interchangeable propagated-ephemeris and direct-CSPICE target-state sources.
@@ -881,6 +881,8 @@ weighted RMS and whole-state, component, or state-block correction tolerances.
 - `StateLayout::Orbit`: `[rx, ry, rz, vx, vy, vz]` (km and km/s).
 - `StateLayout::OrbitClock`: the same six components followed by clock bias `b`
   (s, clock minus reference) and fractional frequency `y` (dimensionless).
+- `StateLayout::OrbitClockSrp`: the eight-state layout followed by the
+  dimensionless effective SRP scale `alpha`, with `a_SRP = alpha * a_SRP_nominal`.
 
 The estimator has no SPICE, force-model, or station dependencies. Its propagation
 callback returns the nonlinear predicted state, state transition matrix, and
@@ -933,14 +935,23 @@ methods remain available; `evaluate` adds analytic partials using the same force
 law. Compose forces and partials together so the trajectory and covariance always
 use the same dynamics. Pure geometry kernels are separate from SPICE wrappers.
 
-For eight states, the adapter uses the existing `ClockModel` for exact bias/
+For eight or nine states, the adapter uses the existing `ClockModel` for exact bias/
 frequency propagation, clock STM, and clock process covariance. Orbital and clock
 process noises are independent in this adapter; the EKF still propagates their
 estimated cross covariance. A custom propagation callback may supply coupled
 dynamics/noise if required.
 
+For nine states, supply `CartesianPropagationConfig::srpAcceleration`: the nominal
+SRP contribution already included in the main force callback, including its
+position/velocity partials and eclipse attenuation. The adapter applies
+`(alpha - 1) * a_SRP_nominal` and integrates six additional sensitivity entries,
+`d(sensitivity)/dt = A * sensitivity + [0; a_SRP_nominal]`. The scale is constant
+between updates. Its initial variance propagates into orbit uncertainty through
+the STM without parameter process noise; the radiometric Jacobian has no direct
+SRP column. Orbit-SRP cross covariance makes the parameter observable over time.
+
 `geometricRadiometricPrediction` supplies simultaneous-epoch range and instantaneous
-range-rate with analytic partials, in km and km/s. For eight states, uplink adds
+range-rate with analytic partials, in km and km/s. For eight or nine states, uplink adds
 `c (b_sc - b_ground)` and `c (y_sc - y_ground)`; downlink reverses these clock terms.
 The station state must share the spacecraft's frame, origin and epoch. The six-state
 layout assumes zero spacecraft clock errors; known ground clock terms may still
@@ -984,7 +995,11 @@ ctest --test-dir build-clang -R '^test_(ekf|perturbation_models|spice_environmen
 python3 tests/plot_ekf.py --no-show
 ```
 
-The demo runs both layouts by default; `--states 6` or `--states 8` selects one.
+The demo runs eight and nine states by default; `--states 8` or `--states 9`
+selects one. The six-state implementation remains available through `--states 6`,
+but the plotter only renders eight/nine-state runs and removes old six-state PNGs.
+With `--two-body`, the default runs eight states only; explicitly selecting nine
+states is rejected because the SRP scale would be unobservable.
 `--output DIR` changes its output directory; pass the same directory to the
 plotter with `--input DIR`. Omit `--no-show` to display interactive Matplotlib
 windows, or change the illustrative accuracy line with `--threshold-km VALUE`.
@@ -1052,7 +1067,7 @@ visible opportunity and may still have visibility gaps. The paired schedules
 share the same truth and measurement-noise realizations. Eclipse does not disable
 radio tracking; solar illumination and station visibility are separate quantities.
 
-The eight-state case uses an ideally referenced ground clock and
+The eight/nine-state cases use an ideally referenced ground clock and
 `DSAC::shortTermWhiteFmBaseline()`. `ClockTruthSimulator::step()` owns stochastic
 clock truth, including deterministic drift, white frequency noise and any configured
 random-walk frequency contribution. The EKF's Cartesian adapter uses `ClockModel`
@@ -1082,8 +1097,14 @@ The illustrative presets are:
 SRP scales multiply the truth Cr and area/mass values; the area/mass change is
 implemented by changing the estimator area at fixed mass. The SRP preset
 therefore assumes 0.855 of the true effective SRP coefficient (14.5% low).
-These two parameters multiply the same cannonball force and are not separately
-identified or estimated by this 6/8-state filter.
+These two parameters multiply the same cannonball force and cannot be separately
+identified here. The eight-state estimator holds their product fixed. The
+nine-state estimator uses the declared nominal SRP reference (the truth's
+nominal Cr/area/mass in this benchmark) and initializes `alpha` to the product
+of the mismatch scales: 1 for matched, 0.855 for SRP/combined. Truth has
+`alpha=1`. The illustrative prior standard deviation is 0.2 (20%), independent
+of the initial orbit/clock errors. The estimator receives no truth correction;
+measurements update its scale through orbit-SRP cross covariance.
 
 Clock drift offsets are fractional-frequency change per day, converted to
 per-second units by dividing by 86400. The clock preset is deliberately a stress
@@ -1091,7 +1112,7 @@ case, not an asserted DSAC drift uncertainty: its offset is much larger than the
 baseline drift. Both clock diffusion intensities are multiplied by the noise
 scale (a variance/intensity factor, not a standard-deviation factor). The baseline
 frequency random walk is zero and remains zero when scaled. Clock mismatches
-apply only to 8-state runs; the 6-state case keeps ideal clocks. The wrong drift
+apply only to 8/9-state runs; the 6-state case keeps ideal clocks. The wrong drift
 is held fixed by the estimator, and no additional state estimates it.
 
 Run isolated and combined cases, then plot the comparison:
@@ -1101,6 +1122,7 @@ Run isolated and combined cases, then plot the comparison:
 ./build-clang/ekf_demo --mismatch srp
 ./build-clang/ekf_demo --mismatch clock
 ./build-clang/ekf_demo --mismatch combined
+python3 tests/plot_ekf.py --input 'Output EKF/srp_mismatch' --no-show
 python3 tests/plot_ekf.py --no-show \
   --compare 'Output EKF/srp_mismatch' \
   --compare 'Output EKF/clock_mismatch' \
@@ -1124,24 +1146,30 @@ Without an explicit destination, runs with numeric overrides use
 `--srp-area-mass-scale`, `--clock-drift-offset-per-day`, and `--clock-noise-scale`.
 Scales must be finite and nonnegative, with area/mass strictly positive; drift
 may have either sign. `--two-body` rejects SRP mismatch because SRP is disabled.
-No extra orbital process noise is inserted to conceal mismatches, and neither
-SRP parameters nor clock drift are augmented into the estimated state.
-Covariance consequently still describes the estimator's assumed model; actual
-errors can exceed its predicted uncertainty when that model is wrong.
+No orbital or SRP-parameter process noise is added. Existing `ClockModel`
+diffusion remains in both estimators. The nine-state covariance includes initial
+SRP-scale uncertainty; clock drift is still held fixed. Covariance describes
+these assumptions, so residual model errors may still exceed its uncertainty.
 
 The comparison plot focuses on the final tracking outage to reveal small
 holdover differences. It shows position error and each covariance uncertainty
-reference; the 8-state figure also shows clock bias/frequency errors with each
+reference; the 8/9-state figures also show clock bias/frequency errors with each
 estimator's +/-3 sigma bands. Before comparing, the plotter requires identical
 exported truth states, observations, epochs and tracking selection. Regenerate
 older CSVs before using `--compare`, because those fields were added here.
 
-`Output EKF/` stores four CSVs (`ekf_6_continuous.csv`, `ekf_6_gaps.csv`, and their
-eight-state counterparts) and plots of component state errors with +/-3 sigma,
+`Output EKF/` stores four default CSVs (`ekf_8_continuous.csv`, `ekf_8_gaps.csv`,
+and their nine-state counterparts) and plots of component state errors with +/-3 sigma,
 clock errors, position-error norm against the continuous comparison, pre-update
 innovations and their uncertainty, and eclipse flags/illumination for truth and
 estimated geometry. The eclipse plots replace the autocorrelation plots; the
 plotter removes those superseded PNGs when regenerating the output folder.
+When both layouts are present, `ekf_8_9_position_accuracy.png` overlays their
+position-error norms and uncertainty references, including zooms of the 2-4 h
+gap and final outage. `ekf_8_9_position_errors.png` overlays signed XYZ errors
+and each filter's +/-3 sigma bands on symmetric-log axes (linear within +/-10 m).
+`ekf_9_srp_scale.png` shows the estimated scale, truth and +/-3 sigma interval.
+Comparisons require identical exported truth, measurements and tracking.
 Green plot bands denote epochs with measurements. Signed errors are estimate
 minus truth. CSVs include truth and estimated states, the observed range/rate,
 component sigmas, innovation covariance diagonal,
@@ -1153,7 +1181,9 @@ calibrated probability bound for the 3D error norm.
 
 `test_ekf` checks analytic free-motion state/STM/noise propagation, a linear Kalman
 reference with correlated observations, invariance under measurement permutation,
-exact clock propagation and small clock diffusion, cross covariance, mixed-unit
+exact clock propagation and small clock diffusion, nine-state STM against finite
+differences, scaled SRP trajectory agreement, constant-parameter/no-noise behavior,
+SRP recovery through orbital measurements, cross covariance, mixed-unit
 updates, circular two-body propagation, finite-difference STM/radiometric partials,
 noise maximum-step agreement, noiseless sequential orbit/clock recovery after a
 tracking gap, NIS rejection, semidefinite priors, and invalid inputs without
@@ -1176,15 +1206,52 @@ differential-gravity formula, SRP mismatch isolation, matched-force equality,
 analytic clock holdover under drift mismatch and the estimator noise scaling.
 The existing `test_synth_observations` also exercises the retained SPICE force interfaces.
 
-Ensemble runners and NEES/NIS consistency studies are reserved for the separate
-`montecarlo/` directory. They are not implemented in this first version. The
-single-run figures do not establish statistical consistency, minimum tracking
-hours or DSAC cost savings. Full Voyager EKF integration, retarded-time uplink
-measurements with clock/count-time handling, a coherent two-way baseline, and
-parameter estimation/noise compensation for model mismatch remain subsequent
-work. The design follows the covariance, measurement-processing and bias-modeling guidance in NASA
-*Navigation Filter Best Practices*, second edition, NASA/TP-2018-219822/Revision
-(March 2025).
+The single-run figures do not establish statistical consistency or mission
+tracking budgets. Full Voyager EKF integration, retarded-time uplink measurements,
+a coherent two-way baseline and residual model-noise compensation remain future
+work. The design follows NASA *Navigation Filter Best Practices*, second edition,
+NASA/TP-2018-219822/Revision (March 2025).
+
+#### Monte Carlo consistency study
+
+`montecarlo/ekf_montecarlo.cpp` is a standalone paired eight/nine-state runner:
+
+```sh
+cmake --build build-clang --target ekf_montecarlo test_montecarlo -j4
+ctest --test-dir build-clang -R '^test_montecarlo(_runner)?$' --output-on-failure
+./build-clang/ekf_montecarlo --runs 100 --seed 2026
+python3 montecarlo/plot_montecarlo.py --no-show
+```
+
+Outputs are in ignored `Output_montecarlo/`; `--output DIR` changes the destination.
+The plotter accepts `--input DIR` and requires NumPy, Matplotlib and SciPy.
+Initial sigmas are 100 m per position component and 1 m/s per velocity
+component; `--position-sigma-m X` and `--velocity-sigma-m-s X` override them.
+Errors are sampled from that same declared prior. An isotropic orbital SNC
+process covariance follows NASA section 3.2.3.1, with configurable
+`--acceleration-noise-density X` in m/s^(3/2), default `1e-6`. The existing
+propagator integrates its covariance with the STM; SRP parameter Q remains zero.
+For a paired zero-orbital-Q baseline, rerun with `--acceleration-noise-density 0`
+and `--output Output_montecarlo/no_process_noise`; the plotter's
+`--baseline Output_montecarlo/no_process_noise` adds a comparison figure.
+The two cases are a matched control with SRP known to both filters, and an
+uncertain-SRP ensemble with constant truth scale drawn from `N(1, 0.2²)`.
+Initial orbit/clock errors are drawn from the declared prior; measurement and
+clock noise have separate seeded streams. Both filters share each realization's
+truth, observations and fixed nominal contact plan. Orbital SNC compensates
+estimator uncertainty; truth has no stochastic acceleration. Existing clock
+diffusion remains. The SNC intensity is an illustrative tuning value, not a NASA
+recommendation or a guarantee of consistency. The matched ninth state has zero
+variance, so full NEES has eight stochastic degrees of freedom in that control.
+
+The runner computes NEES using full covariance cross terms and unit-scaled
+Cholesky solves, plus orbital NEES and pre-update NIS. The figures show median
+and 5–95% position errors, pointwise 95% chi-square consistency intervals,
+marginal +/-3 sigma coverage and SRP estimation uncertainty. `ensemble.csv` and
+`summary.json` contain aggregates; four per-run CSVs and `study.json` retain the
+samples and configuration. See [montecarlo/README.md](montecarlo/README.md) for
+assumptions, units and statistical interpretation. The tests cover correlated
+sampling, analytic/mixed-unit NEES and a two-run end-to-end study.
 
 ### Synthetic Observations
 

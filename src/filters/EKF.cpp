@@ -7,8 +7,9 @@
 namespace fd::filters {
 
 EKF::EKF(StateLayout layout) : layout_(layout) {
-    if (layout != StateLayout::Orbit && layout != StateLayout::OrbitClock)
-        throw std::invalid_argument("EKF layout must contain 6 or 8 states.");
+    if (layout != StateLayout::Orbit && layout != StateLayout::OrbitClock &&
+        layout != StateLayout::OrbitClockSrp)
+        throw std::invalid_argument("EKF layout must contain 6, 8 or 9 states.");
 }
 
 void EKF::setInitialState(const Eigen::VectorXd& state, const Eigen::MatrixXd& covariance,

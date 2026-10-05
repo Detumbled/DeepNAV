@@ -16,3 +16,6 @@ AGENTS.md
 *.txt
 *.o
 *.a
+
+/Output_montecarlo/
+__pycache__/

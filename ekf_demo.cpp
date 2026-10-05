@@ -21,7 +21,13 @@
 
 using namespace fd::filters;
 namespace {
-constexpr double step = 60, duration = 8 * 3600;
+constexpr double step = 60, duration = 8 * 3600, srpScaleSigma = .2;
+
+double relativeSrpScale(const fd::simulation::EarthOrbitModel& model,
+                        const fd::simulation::EarthOrbitModel& reference) {
+    return (model.srpCr * model.srpAreaM2 / model.srpMassKg) /
+           (reference.srpCr * reference.srpAreaM2 / reference.srpMassKg);
+}
 
 void writeModel(std::ostream& output, const fd::simulation::EarthOrbitModel& model) {
     output << "{\"srp_cr\": " << model.srpCr << ", \"srp_area_m2\": " << model.srpAreaM2
@@ -45,13 +51,16 @@ void writeMetadata(const std::filesystem::path& output, double startEpoch, bool 
         << "  \"stations\": [\"DSS-43\", \"DSS-63\", \"DSS-14\"],\n"
         << "  \"eclipse_model\": \"Spherical angular-disk overlap, Earth equatorial radius\",\n"
         << "  \"clock_configuration\": \"DSAC-inspired baseline; mismatches are illustrative\",\n"
-        << "  \"clock_applies_to\": \"8-state only; 6-state clocks are ideal\",\n"
+        << "  \"clock_applies_to\": \"8/9-state only; 6-state clocks are ideal\",\n"
         << "  \"clock_truth_seed\": 2027,\n  \"measurement_seed\": 2026,\n"
         << "  \"truth_model\": ";
     writeModel(metadata, truth);
     metadata << ",\n  \"estimator_model\": ";
     writeModel(metadata, estimate);
-    metadata << "\n}\n";
+    metadata << ",\n  \"srp_scale_truth\": 1,\n  \"srp_scale_initial\": "
+             << relativeSrpScale(estimate, truth)
+             << ",\n  \"srp_scale_initial_sigma\": " << srpScaleSigma
+             << ",\n  \"srp_scale_process_noise\": 0,\n  \"orbital_process_noise\": 0\n}\n";
     if (!metadata)
         throw std::runtime_error("Cannot write EKF scenario metadata.");
 }
@@ -70,19 +79,24 @@ void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly
     config.integrator.initialStep = 30;
     config.integrator.maximumStep = 10; // Resolve the short penumbra transitions.
     config.clock = estimateModel.clock;
+    if (n == 9)
+        config.srpAcceleration = fd::simulation::earthOrbitSrp(environment, startEpoch, truthModel);
     const CartesianPropagator propagate(
-        fd::simulation::earthOrbitForces(environment, startEpoch, estimateModel, twoBodyOnly),
+        fd::simulation::earthOrbitForces(environment, startEpoch,
+                                         n == 9 ? truthModel : estimateModel, twoBodyOnly),
         config);
     auto truthConfig = config;
     truthConfig.clock = truthModel.clock;
     const CartesianPropagator propagateTruth(
         fd::simulation::earthOrbitForces(environment, startEpoch, truthModel, twoBodyOnly),
         truthConfig);
-    EKF filter(n == 6 ? StateLayout::Orbit : StateLayout::OrbitClock);
+    EKF filter(n == 6   ? StateLayout::Orbit
+               : n == 8 ? StateLayout::OrbitClock
+                        : StateLayout::OrbitClockSrp);
     Eigen::VectorXd truth = Eigen::VectorXd::Zero(n);
     const double speed = std::sqrt(environment.earthMu() / radius);
     truth.head<6>() << radius, 0, 0, 0, speed * std::cos(25 * rad), speed * std::sin(25 * rad);
-    if (n == 8) {
+    if (n >= 8) {
         truth[6] = 2e-7;
         truth[7] = 2e-11;
     }
@@ -91,10 +105,15 @@ void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly
         (Eigen::Matrix<double, 6, 1>() << .6, -.4, .3, 1e-4, -8e-5, 6e-5).finished();
     Eigen::VectorXd sigma = Eigen::VectorXd::Constant(n, 1e-3);
     sigma.head<3>().setConstant(1);
-    if (n == 8) {
-        initial.tail<2>().setZero();
+    if (n >= 8) {
+        initial.segment<2>(6).setZero();
         sigma[6] = 1e-6;
         sigma[7] = 1e-10;
+    }
+    if (n == 9) {
+        truth[8] = 1;
+        initial[8] = relativeSrpScale(estimateModel, truthModel);
+        sigma[8] = srpScaleSigma; // Illustrative 20% prior uncertainty on the effective SRP scale.
     }
     filter.setInitialState(initial, sigma.array().square().matrix().asDiagonal(), 0);
     const Eigen::Vector2d measurementSigma(.01, 1e-7);
@@ -122,7 +141,7 @@ void run(int n, const std::filesystem::path& output, bool gaps, bool twoBodyOnly
             // Propagate orbital truth separately so the clock simulator owns every
             // clock increment.
             truth.head<6>() = propagateTruth(time - step, time, truth.head<6>()).state;
-            if (n == 8) {
+            if (n >= 8) {
                 const auto next = clockTruth.step({truth[6], truth[7]}, step);
                 truth[6] = next.bias_s;
                 truth[7] = next.fractional_frequency;
@@ -236,12 +255,12 @@ int main(int argc, char** argv) {
                 outputSpecified = true;
             } else if (argument == "--states" && i + 1 < argc) {
                 const std::string value = argv[++i];
-                if (value != "6" && value != "8")
-                    throw std::invalid_argument("--states must be 6 or 8.");
-                selected = value == "6" ? 6 : 8;
+                if (value != "6" && value != "8" && value != "9")
+                    throw std::invalid_argument("--states must be 6, 8 or 9.");
+                selected = std::stoi(value);
             } else
                 throw std::invalid_argument(
-                    "Usage: ekf_demo [--states 6|8] [--output DIR] [--two-body] "
+                    "Usage: ekf_demo [--states 6|8|9] [--output DIR] [--two-body] "
                     "[--kernels DIR] [--start-utc UTC] [--mismatch matched|srp|clock|combined] "
                     "[--srp-cr-scale X] [--srp-area-mass-scale X] "
                     "[--clock-drift-offset-per-day X] [--clock-noise-scale X]");
@@ -259,6 +278,8 @@ int main(int argc, char** argv) {
         }
         if (twoBodyOnly && (mismatch.srpCrScale != 1 || mismatch.srpAreaMassScale != 1))
             throw std::invalid_argument("SRP mismatch requires SRP forces; omit --two-body.");
+        if (twoBodyOnly && selected == 9)
+            throw std::invalid_argument("The 9-state SRP estimator requires SRP; omit --two-body.");
         const auto truthModel = fd::simulation::nominalEarthOrbitModel();
         const auto estimateModel = fd::simulation::estimatorModel(truthModel, mismatch);
         const std::string label = overrides.empty() ? mismatchCase : mismatchCase + " (custom)";
@@ -283,8 +304,8 @@ int main(int argc, char** argv) {
         std::cout << "RKF45; "
                   << (twoBodyOnly ? "Earth point mass" : "Earth + J2 + Sun/Moon gravity + SRP")
                   << "; model case: " << label << '\n';
-        for (int n : {6, 8})
-            if (selected == 0 || selected == n) {
+        for (int n : {6, 8, 9})
+            if ((selected == n || (selected == 0 && n >= 8)) && !(twoBodyOnly && n == 9)) {
                 run(n, output, false, twoBodyOnly, environment, startEpoch, stations, truthModel,
                     estimateModel);
                 run(n, output, true, twoBodyOnly, environment, startEpoch, stations, truthModel,

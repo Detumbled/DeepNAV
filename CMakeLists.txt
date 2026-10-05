@@ -242,6 +242,8 @@ set(APP_SOURCE_CANDIDATES
     tests/test_spice_environment.cpp
     tests/test_earth_orbit_scenario.cpp
     ekf_demo.cpp
+    montecarlo/ekf_montecarlo.cpp
+    tests/test_montecarlo.cpp
 
     tests/Optical/test_opnav_geometry.cpp
 )
@@ -257,11 +259,15 @@ foreach(app_src IN LISTS APP_SOURCES)
     get_filename_component(app_name "${app_src}" NAME_WE)
     add_executable(${app_name} "${app_src}")
 
-    if(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "test_spice_environment"
+    if(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "ekf_montecarlo"
+       OR app_name STREQUAL "test_spice_environment"
        OR app_name STREQUAL "test_earth_orbit_scenario")
         target_link_libraries(${app_name} PRIVATE big_functions)
         target_compile_definitions(${app_name} PRIVATE
             DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    elseif(app_name STREQUAL "test_montecarlo")
+        target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/montecarlo)
+        target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
     elseif(app_name STREQUAL "test_ekf"
        OR app_name STREQUAL "test_perturbation_models")
         target_link_libraries(${app_name} PRIVATE deepnav_ekf)
@@ -342,3 +348,6 @@ foreach(app_src IN LISTS APP_SOURCES)
         add_test(NAME ${app_name} COMMAND ${app_name} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     endif()
 endforeach()
+
+add_test(NAME test_montecarlo_runner COMMAND ekf_montecarlo --runs 2
+    --output "${CMAKE_BINARY_DIR}/Output_montecarlo_smoke")

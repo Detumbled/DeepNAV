@@ -26,9 +26,11 @@ StatePrediction CartesianPropagator::operator()(double fromEpoch, double toEpoch
     const double duration = toEpoch - fromEpoch;
     const Eigen::Index n = initial.size();
     if (!std::isfinite(fromEpoch) || !std::isfinite(toEpoch) || !std::isfinite(duration) ||
-        duration < 0.0 || (n != 6 && n != 8) || !initial.allFinite())
+        duration < 0.0 || (n != 6 && n != 8 && n != 9) || !initial.allFinite())
         throw std::invalid_argument(
-            "Cartesian propagation requires finite 6/8-state input and forward time.");
+            "Cartesian propagation requires finite 6/8/9-state input and forward time.");
+    if (n == 9 && !config_.srpAcceleration)
+        throw std::invalid_argument("9-state propagation requires a nominal SRP callback.");
     StatePrediction result{initial, Eigen::MatrixXd::Identity(n, n), Eigen::MatrixXd::Zero(n, n)};
     if (duration == 0.0)
         return result;
@@ -44,14 +46,25 @@ StatePrediction CartesianPropagator::operator()(double fromEpoch, double toEpoch
             throw std::invalid_argument("Process covariance scales overflowed or underflowed.");
     }
     const State6 inverseNoiseScale = noiseScale.cwiseInverse();
-    Eigen::VectorXd augmented = Eigen::VectorXd::Zero(withNoise ? 78 : 42);
+    const Eigen::Index noiseOffset = n == 9 ? 48 : 42;
+    Eigen::VectorXd augmented = Eigen::VectorXd::Zero(noiseOffset + (withNoise ? 36 : 0));
     augmented.head<6>() = inverseScale.asDiagonal() * initial.head<6>();
     Eigen::Map<Matrix6>(augmented.data() + 6).setIdentity();
     const auto dynamics = [&](double elapsed, od::RKF45Integrator::ConstStateRef state,
                               od::RKF45Integrator::StateRef rate) {
         const State6 physical = config_.stateScales.asDiagonal() * state.head<6>();
-        const auto force =
-            acceleration_(fromEpoch + elapsed, physical.head<3>(), physical.tail<3>());
+        auto force = acceleration_(fromEpoch + elapsed, physical.head<3>(), physical.tail<3>());
+        AccelerationEvaluation srp;
+        if (n == 9) {
+            srp = config_.srpAcceleration(fromEpoch + elapsed, physical.head<3>(),
+                                          physical.tail<3>());
+            if (!srp.acceleration.allFinite() || !srp.positionJacobian.allFinite() ||
+                !srp.velocityJacobian.allFinite())
+                throw std::invalid_argument("SRP force/partials must be finite.");
+            force.acceleration += (initial[8] - 1) * srp.acceleration;
+            force.positionJacobian += (initial[8] - 1) * srp.positionJacobian;
+            force.velocityJacobian += (initial[8] - 1) * srp.velocityJacobian;
+        }
         if (!force.acceleration.allFinite() || !force.positionJacobian.allFinite() ||
             !force.velocityJacobian.allFinite())
             throw std::invalid_argument("Cartesian force/partials must be finite.");
@@ -65,10 +78,17 @@ StatePrediction CartesianPropagator::operator()(double fromEpoch, double toEpoch
         Eigen::Map<Matrix6>(rate.data() + 6) = inverseScale.asDiagonal() * jacobian *
                                                config_.stateScales.asDiagonal() *
                                                Eigen::Map<const Matrix6>(state.data() + 6);
+        if (n == 9) {
+            State6 parameterRate = State6::Zero();
+            parameterRate.tail<3>() = srp.acceleration;
+            rate.segment<6>(42) = inverseScale.asDiagonal() * jacobian *
+                                      config_.stateScales.asDiagonal() * state.segment<6>(42) +
+                                  inverseScale.asDiagonal() * parameterRate;
+        }
         if (withNoise) {
             const Matrix6 a = inverseNoiseScale.asDiagonal() * jacobian * noiseScale.asDiagonal();
-            const Eigen::Map<const Matrix6> q(state.data() + 42);
-            Eigen::Map<Matrix6> qRate(rate.data() + 42);
+            const Eigen::Map<const Matrix6> q(state.data() + noiseOffset);
+            Eigen::Map<Matrix6> qRate(rate.data() + noiseOffset);
             // Integrate the discrete noise integral with the same physical dynamics as the STM.
             qRate = a * q + q * a.transpose();
             qRate.bottomRightCorner<3, 3>() += inverseNoiseScale.tail<3>().asDiagonal() *
@@ -83,15 +103,19 @@ StatePrediction CartesianPropagator::operator()(double fromEpoch, double toEpoch
         config_.stateScales.asDiagonal() * Eigen::Map<const Matrix6>(integrated.state.data() + 6) *
         inverseScale.asDiagonal();
     if (withNoise)
-        result.processCovariance.topLeftCorner<6, 6>() = detail::symmetrize(
-            noiseScale.asDiagonal() * Eigen::Map<const Matrix6>(integrated.state.data() + 42) *
-            noiseScale.asDiagonal());
-    if (n == 8) {
+        result.processCovariance.topLeftCorner<6, 6>() =
+            detail::symmetrize(noiseScale.asDiagonal() *
+                               Eigen::Map<const Matrix6>(integrated.state.data() + noiseOffset) *
+                               noiseScale.asDiagonal());
+    if (n == 9)
+        result.transition.block<6, 1>(0, 8) =
+            config_.stateScales.asDiagonal() * integrated.state.segment<6>(42);
+    if (n >= 8) {
         const auto clock = clock_.propagate({initial[6], initial[7]}, duration);
         result.state[6] = clock.bias_s;
         result.state[7] = clock.fractional_frequency;
-        result.transition.bottomRightCorner<2, 2>() = clock_.transition(duration);
-        result.processCovariance.bottomRightCorner<2, 2>() = clock_.processNoise(duration);
+        result.transition.block<2, 2>(6, 6) = clock_.transition(duration);
+        result.processCovariance.block<2, 2>(6, 6) = clock_.processNoise(duration);
     }
     detail::validateCovariance(result.processCovariance, n, false, "Integrated process covariance");
     return result;

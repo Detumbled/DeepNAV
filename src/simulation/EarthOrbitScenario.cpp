@@ -47,14 +47,25 @@ EarthOrbitModel estimatorModel(const EarthOrbitModel& truth, const ModelMismatch
 }
 
 fd::perturbations::AccelerationFunction
+earthOrbitSrp(const fd::dynamics::SpiceEarthEnvironment& environment, double startEpoch,
+              const EarthOrbitModel& model) {
+    const fd::perturbations::SolarRadiationPressure srp("EARTH", "J2000", model.srpCr,
+                                                        model.srpAreaM2, model.srpMassKg);
+    return [&environment, startEpoch, srp](double elapsed, const Eigen::Vector3d& position,
+                                           const Eigen::Vector3d&) {
+        return srp.evaluateWithShadow(position, environment.sunPosition(startEpoch + elapsed),
+                                      environment.earthRadius(), environment.sunRadius());
+    };
+}
+
+fd::perturbations::AccelerationFunction
 earthOrbitForces(const fd::dynamics::SpiceEarthEnvironment& environment, double startEpoch,
                  const EarthOrbitModel& model, bool twoBodyOnly) {
     using namespace fd::perturbations;
     auto gravity = pointMassGravity(environment.earthMu());
     if (twoBodyOnly)
         return gravity;
-    const SolarRadiationPressure srp("EARTH", "J2000", model.srpCr, model.srpAreaM2,
-                                     model.srpMassKg);
+    const auto srp = earthOrbitSrp(environment, startEpoch, model);
     // environment must outlive the returned callback. Forces share Earth origin and J2000 axes.
     return [&environment, startEpoch, gravity, srp](double elapsed, const Eigen::Vector3d& position,
                                                     const Eigen::Vector3d& velocity) {
@@ -66,8 +77,7 @@ earthOrbitForces(const fd::dynamics::SpiceEarthEnvironment& environment, double 
         const auto solar = thirdBodyGravity(environment.sunMu(), position, sun);
         const auto lunar =
             thirdBodyGravity(environment.moonMu(), position, environment.moonPosition(epoch));
-        const auto radiation = srp.evaluateWithShadow(position, sun, environment.earthRadius(),
-                                                      environment.sunRadius());
+        const auto radiation = srp(elapsed, position, velocity);
         force.acceleration +=
             oblate.acceleration + solar.acceleration + lunar.acceleration + radiation.acceleration;
         force.positionJacobian += oblate.positionJacobian + solar.positionJacobian +

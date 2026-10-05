@@ -9,8 +9,9 @@ geometricRadiometricPrediction(const Eigen::VectorXd& state,
                                const fd::dynamics::CartesianState& station, LinkDirection direction,
                                double groundBiasSeconds, double groundFractionalFrequency) {
     constexpr double c = 299792.458; // km/s
-    if ((state.size() != 6 && state.size() != 8) || !state.allFinite() || !station.allFinite() ||
-        !std::isfinite(groundBiasSeconds) || !std::isfinite(groundFractionalFrequency) ||
+    if ((state.size() != 6 && state.size() != 8 && state.size() != 9) || !state.allFinite() ||
+        !station.allFinite() || !std::isfinite(groundBiasSeconds) ||
+        !std::isfinite(groundFractionalFrequency) ||
         (direction != LinkDirection::Uplink && direction != LinkDirection::Downlink))
         throw std::invalid_argument("Invalid geometric radiometric state, station or clock.");
     const Eigen::Vector3d relative = state.head<3>() - station.positionKm;
@@ -27,11 +28,11 @@ geometricRadiometricPrediction(const Eigen::VectorXd& state,
     result.jacobian.block<1, 3>(1, 0) = ((velocity - rate * unit) / range).transpose();
     result.jacobian.block<1, 3>(1, 3) = unit.transpose();
     const double sign = direction == LinkDirection::Uplink ? 1.0 : -1.0;
-    const double bias = state.size() == 8 ? state[6] : 0.0;
-    const double frequency = state.size() == 8 ? state[7] : 0.0;
+    const double bias = state.size() >= 8 ? state[6] : 0.0;
+    const double frequency = state.size() >= 8 ? state[7] : 0.0;
     result.value[0] += sign * c * (bias - groundBiasSeconds);
     result.value[1] += sign * c * (frequency - groundFractionalFrequency);
-    if (state.size() == 8) {
+    if (state.size() >= 8) {
         result.jacobian(0, 6) = sign * c;
         result.jacobian(1, 7) = sign * c;
     }

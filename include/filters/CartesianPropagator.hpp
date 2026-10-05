@@ -18,17 +18,20 @@ struct CartesianPropagationConfig {
     // Inertial white acceleration diffusion, km^2/s^3.
     Eigen::Matrix3d accelerationDiffusion{Eigen::Matrix3d::Zero()};
     fd::clocks::ClockParameters clock;
+    // For 9 states: the nominal force already includes this SRP contribution.
+    // State[8] scales it; its constant-parameter sensitivity is integrated with the STM.
+    AccelerationFunction srpAcceleration;
 };
 
 // Existing RKF45 integrates scaled orbit/STM/noise equations; clock dynamics are exact.
 class CartesianPropagator {
-public:
+  public:
     explicit CartesianPropagator(AccelerationFunction acceleration,
                                  CartesianPropagationConfig config = {});
     [[nodiscard]] StatePrediction operator()(double fromEpoch, double toEpoch,
                                              const Eigen::VectorXd& state) const;
 
-private:
+  private:
     AccelerationFunction acceleration_;
     CartesianPropagationConfig config_;
     fd::clocks::ClockModel clock_;

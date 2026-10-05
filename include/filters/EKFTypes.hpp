@@ -5,8 +5,9 @@
 
 namespace fd::filters {
 
-// Cartesian km, km/s; optional clock bias in seconds and fractional frequency.
-enum class StateLayout { Orbit = 6, OrbitClock = 8 };
+// Cartesian km, km/s; optional clock bias in seconds, fractional frequency and dimensionless SRP
+// scale.
+enum class StateLayout { Orbit = 6, OrbitClock = 8, OrbitClockSrp = 9 };
 
 struct StatePrediction {
     Eigen::VectorXd state;

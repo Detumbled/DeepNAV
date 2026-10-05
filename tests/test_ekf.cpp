@@ -176,14 +176,93 @@ void nonlinearPropagation() {
             "Integrated process covariance depends excessively on RKF45 maximum step.");
 }
 
+void srpParameterEstimation() {
+    const auto gravity = fd::perturbations::pointMassGravity(398600.4418);
+    const fd::perturbations::SolarRadiationPressure radiation("EARTH", "J2000", 1.3, 20, 1000);
+    const Eigen::Vector3d sun(149597870.7, 0, 0);
+    const AccelerationFunction srp = [radiation, sun](double, const Eigen::Vector3d& r,
+                                                      const Eigen::Vector3d&) {
+        return radiation.evaluateAtSunPosition(r, sun);
+    };
+    CartesianPropagationConfig config;
+    config.srpAcceleration = srp;
+    const CartesianPropagator propagate(fd::perturbations::sumAccelerations({gravity, srp}),
+                                        config);
+    Eigen::VectorXd x = Eigen::VectorXd::Zero(9);
+    x.head<6>() << 20000, 0, 0, 0, 4, 2;
+    x[6] = 2e-7;
+    x[7] = 2e-11;
+    x[8] = .855;
+    const auto prediction = propagate(0, 600, x);
+    Eigen::MatrixXd finiteDifference(9, 9);
+    for (int j = 0; j < 9; ++j) {
+        const double step = j < 3 ? .1 : j < 6 ? 1e-5 : j == 6 ? 1e-8 : j == 7 ? 1e-10 : .01;
+        auto plus = x, minus = x;
+        plus[j] += step;
+        minus[j] -= step;
+        finiteDifference.col(j) =
+            (propagate(0, 600, plus).state - propagate(0, 600, minus).state) / (2 * step);
+    }
+    near(prediction.transition, finiteDifference, 2e-8);
+    require(prediction.state[8] == x[8] && prediction.processCovariance.isZero(),
+            "Constant SRP estimation added parameter drift or process noise.");
+    const AccelerationFunction scaled = [srp](double t, const Eigen::Vector3d& r,
+                                              const Eigen::Vector3d& v) {
+        auto force = srp(t, r, v);
+        force.acceleration *= .855;
+        force.positionJacobian *= .855;
+        force.velocityJacobian *= .855;
+        return force;
+    };
+    const CartesianPropagator reference(fd::perturbations::sumAccelerations({gravity, scaled}));
+    near(prediction.state.head<8>(), reference(0, 600, x.head<8>()).state, 1e-11);
+
+    Eigen::VectorXd truth = x;
+    truth[8] = 1;
+    Eigen::VectorXd sigma = Eigen::VectorXd::Constant(9, 1e-8);
+    sigma.head<3>().setConstant(1e-5);
+    sigma[6] = 1e-6;
+    sigma[7] = 1e-10;
+    sigma[8] = .2;
+    EKF filter(StateLayout::OrbitClockSrp);
+    filter.setInitialState(x, sigma.array().square().matrix().asDiagonal(), 0);
+    // Observe orbit only: SRP must be inferred through accumulated dynamical sensitivity.
+    const MeasurementFunction model = [](double, const Eigen::VectorXd& state) {
+        MeasurementPrediction m{state.head<6>(), Eigen::MatrixXd::Zero(6, 9)};
+        m.jacobian.leftCols<6>().setIdentity();
+        return m;
+    };
+    Eigen::Matrix<double, 6, 1> measurementSigma;
+    measurementSigma.head<3>().setConstant(1e-5);
+    measurementSigma.tail<3>().setConstant(1e-10);
+    const Eigen::MatrixXd r = measurementSigma.array().square().matrix().asDiagonal();
+    for (int k = 1; k <= 20; ++k) {
+        truth = propagate((k - 1) * 60, k * 60, truth).state;
+        filter.predictTo(k * 60, propagate);
+        (void)filter.update(k * 60, truth.head<6>(), r, model);
+    }
+    require(std::abs(filter.state()[8] - 1) < .005 && filter.covariance()(8, 8) < .001,
+            "Orbit measurements failed to identify the SRP scale and reduce its uncertainty.");
+    rejects([&] { (void)CartesianPropagator{gravity}(0, 60, x); });
+    config.clock = {3e-16 / 86400, 2.25e-26, 1e-30};
+    config.accelerationDiffusion = 1e-8 * Eigen::Matrix3d::Identity();
+    const CartesianPropagator noisy(fd::perturbations::sumAccelerations({gravity, srp}), config);
+    x[8] = 1;
+    const auto nine = noisy(0, 120, x), eight = noisy(0, 120, x.head<8>());
+    require((nine.processCovariance.topLeftCorner<8, 8>() - eight.processCovariance).norm() <
+                    1e-8 * eight.processCovariance.norm() &&
+                nine.processCovariance.row(8).isZero() && nine.processCovariance.col(8).isZero(),
+            "SRP augmentation moved clock noise or introduced parameter process noise.");
+}
+
 void measurementPartials() {
     using namespace fd::observations;
     const fd::dynamics::CartesianState station{{100, -20, 30}, {.1, -.2, .3}};
-    for (int n : {6, 8})
+    for (int n : {6, 8, 9})
         for (auto direction : {LinkDirection::Uplink, LinkDirection::Downlink}) {
             Eigen::VectorXd x = Eigen::VectorXd::Zero(n);
             x.head<6>() << 20000, 4000, 2000, -1, 3, .4;
-            if (n == 8) {
+            if (n >= 8) {
                 x[6] = 2e-6;
                 x[7] = 1e-10;
             }
@@ -321,6 +400,8 @@ int main() {
         std::cout << "Clock and cross covariance passed.\n";
         nonlinearPropagation();
         std::cout << "Nonlinear propagation passed.\n";
+        srpParameterEstimation();
+        std::cout << "SRP sensitivity and parameter recovery passed.\n";
         measurementPartials();
         std::cout << "Measurement partials passed.\n";
         sequentialOrbitRecovery();

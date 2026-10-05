@@ -27,6 +27,10 @@ struct ModelMismatch {
 [[nodiscard]] ModelMismatch namedModelMismatch(const std::string& name);
 [[nodiscard]] EarthOrbitModel estimatorModel(const EarthOrbitModel& truth,
                                              const ModelMismatch& mismatch);
+// Shadowed nominal SRP, also used as the estimated scale's force sensitivity.
+[[nodiscard]] fd::perturbations::AccelerationFunction
+earthOrbitSrp(const fd::dynamics::SpiceEarthEnvironment& environment, double startEpoch,
+              const EarthOrbitModel& model);
 [[nodiscard]] fd::perturbations::AccelerationFunction
 earthOrbitForces(const fd::dynamics::SpiceEarthEnvironment& environment, double startEpoch,
                  const EarthOrbitModel& model, bool twoBodyOnly = false);
