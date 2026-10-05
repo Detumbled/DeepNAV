@@ -1,22 +1,21 @@
 # EKF Monte Carlo
 
 A standalone runner reuses the EKF, RKF45, CSPICE Earth scenario, geometric
-radiometric model and DSAC clock simulator. Results go to `Output_montecarlo/`.
+radiometric model and DSAC clock simulator. Raw data go to `montecarlo/data/`;
+`Output_montecarlo/` contains only four plots comparing eight and nine states.
 
 ```sh
 cmake --build build-clang --target ekf_montecarlo test_montecarlo -j4
 ctest --test-dir build-clang -R '^test_(ekf|montecarlo(_runner)?)$' --output-on-failure
 ./build-clang/ekf_montecarlo --runs 100 --seed 2026
-./build-clang/ekf_montecarlo --runs 100 --seed 2026 --acceleration-noise-density 0 \
-  --output Output_montecarlo/no_process_noise
-python3 montecarlo/plot_montecarlo.py --input Output_montecarlo/no_process_noise --no-show
-python3 montecarlo/plot_montecarlo.py --baseline Output_montecarlo/no_process_noise --no-show
+python3 montecarlo/plot_montecarlo.py --no-show
 ```
 
 The plotter requires NumPy, Matplotlib and SciPy. For faster ensembles, use a
 separate CMake Release build. CSPICE is process-global, so each runner is sequential.
-`--output DIR` and `--kernels DIR` override their defaults; the plotter accepts
-`--input DIR`. Each study records its actual configuration in `study.json`.
+`--output DIR` changes the runner's raw-data directory; `--kernels DIR` overrides
+the kernels. The plotter accepts `--input DIR` for raw data and `--output DIR`
+for figures. Each study records its configuration in the raw-data `study.json`.
 
 ## Initial conditions and pairing
 
@@ -94,14 +93,13 @@ The plotter verifies pairing and produces:
   chi-square intervals. Time samples are correlated; intervals are not simultaneous.
 - `coverage.png`: marginal +/-3 sigma coverage over runs/components in each block;
   this is not joint state coverage.
-- `srp_estimation.png`: SRP error distribution and empirical RMSE versus formal sigma.
-- `ensemble.csv`, `summary.json`: aggregate curves and diagnostics.
-- `process_noise_comparison.png` and `.json`: optional paired zero-Q/SNC comparison;
-  the plotter checks priors, seeds, truth, observations and contact schedule match.
 
-The single-run demo is separate and retains its own prior and zero orbital Q.
-Old diagnostic subfolders reflect earlier configurations; read their metadata
-before comparing results. Incomplete interrupted experiments are not valid studies.
+The plotter exports only these four PNGs, with both filters overlaid in every
+comparison. It does not export aggregate CSVs/JSONs or single-filter SRP plots.
+
+The single-run demo retains its separate 1 km / 1 m/s prior, fixed initial
+orbital offsets, zero orbital Q and sigma 0.2 for its ninth SRP state, including
+the matched run. Monte Carlo instead fixes the matched SRP state exactly.
 
 ## Seeded trial results
 

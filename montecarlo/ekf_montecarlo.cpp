@@ -11,12 +11,15 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <random>
+#include <stdexcept>
 #include <string>
 
 using namespace fd::filters;
@@ -30,7 +33,8 @@ struct Contact {
     fd::dynamics::CartesianState state;
 };
 
-CartesianPropagationConfig propagationConfig(const fd::simulation::EarthOrbitModel& model, double noiseDensity = 0) {
+CartesianPropagationConfig propagationConfig(const fd::simulation::EarthOrbitModel& model,
+                                               double noiseDensity = 0) {
     CartesianPropagationConfig config;
     config.integrator.absoluteTolerance = 1e-11;
     config.integrator.relativeTolerance = 1e-11;
@@ -197,7 +201,7 @@ int main(int argc, char** argv) {
         std::size_t runs = 100;
         std::uint64_t seed = 2026;
         double positionSigma = 100, velocitySigma = 1, noiseDensity = 1e-6;
-        std::filesystem::path output = "Output_montecarlo";
+        std::filesystem::path output = "montecarlo/data";
         std::filesystem::path kernels = std::filesystem::path(DEEPNAV_SOURCE_DIR) / "Kernels";
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
@@ -214,18 +218,23 @@ int main(int argc, char** argv) {
                 const double parameter = std::stod(value, &consumed);
                 if (consumed != value.size() || !std::isfinite(parameter) || parameter < 0 ||
                     (arg != "--acceleration-noise-density" && parameter == 0))
-                    throw std::invalid_argument("Prior sigmas must be positive; noise density may be zero.");
-                if (arg == "--position-sigma-m") positionSigma = parameter;
-                else if (arg == "--velocity-sigma-m-s") velocitySigma = parameter;
-                else noiseDensity = parameter;
+                    throw std::invalid_argument(
+                        "Prior sigmas must be positive; noise density may be zero.");
+                if (arg == "--position-sigma-m")
+                    positionSigma = parameter;
+                else if (arg == "--velocity-sigma-m-s")
+                    velocitySigma = parameter;
+                else
+                    noiseDensity = parameter;
             } else if (arg == "--output")
                 output = value;
             else if (arg == "--kernels")
                 kernels = value;
             else
                 throw std::invalid_argument(
-                    "Usage: ekf_montecarlo [--runs N] [--seed N] [--position-sigma-m X] [--velocity-sigma-m-s X] [--acceleration-noise-density X] [--output "
-                    "DIR] [--kernels DIR]");
+                    "Usage: ekf_montecarlo [--runs N] [--seed N] [--position-sigma-m X] "
+                    "[--velocity-sigma-m-s X] [--acceleration-noise-density X] "
+                    "[--output DIR] [--kernels DIR]");
         }
         if (runs == 0 || runs > (std::numeric_limits<std::uint64_t>::max() - seed) / 3)
             throw std::invalid_argument("Run count must be positive and seeds must not overflow.");

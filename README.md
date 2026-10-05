@@ -1223,17 +1223,27 @@ ctest --test-dir build-clang -R '^test_montecarlo(_runner)?$' --output-on-failur
 python3 montecarlo/plot_montecarlo.py --no-show
 ```
 
-Outputs are in ignored `Output_montecarlo/`; `--output DIR` changes the destination.
-The plotter accepts `--input DIR` and requires NumPy, Matplotlib and SciPy.
+Raw CSVs and configuration are in ignored `montecarlo/data/`; the runner's
+`--output DIR` changes that destination. The plotter reads it with `--input DIR`
+and writes only four 8/9-state comparison PNGs to `Output_montecarlo/`
+(overridden with its `--output DIR`). It requires NumPy, Matplotlib and SciPy.
 Initial sigmas are 100 m per position component and 1 m/s per velocity
 component; `--position-sigma-m X` and `--velocity-sigma-m-s X` override them.
 Errors are sampled from that same declared prior. An isotropic orbital SNC
 process covariance follows NASA section 3.2.3.1, with configurable
 `--acceleration-noise-density X` in m/s^(3/2), default `1e-6`. The existing
 propagator integrates its covariance with the STM; SRP parameter Q remains zero.
-For a paired zero-orbital-Q baseline, rerun with `--acceleration-noise-density 0`
-and `--output Output_montecarlo/no_process_noise`; the plotter's
-`--baseline Output_montecarlo/no_process_noise` adds a comparison figure.
+Set `--acceleration-noise-density 0` to disable orbital SNC.
+Monte Carlo defaults and the single-run demo are separate configurations:
+
+| Parameter | Monte Carlo | Single-run demo |
+|---|---|---|
+| Initial position sigma per component | 100 m | 1 km |
+| Initial velocity sigma per component | 1 m/s | 1 m/s |
+| Initial orbital error | Gaussian draw from P0 | Fixed position/velocity offsets |
+| Orbital SNC sqrt(q) | 1e-6 m/s^(3/2) | 0 |
+| SRP scale prior in matched 9-state case | Known exactly | Sigma 0.2 |
+
 The two cases are a matched control with SRP known to both filters, and an
 uncertain-SRP ensemble with constant truth scale drawn from `N(1, 0.2²)`.
 Initial orbit/clock errors are drawn from the declared prior; measurement and
@@ -1247,9 +1257,9 @@ variance, so full NEES has eight stochastic degrees of freedom in that control.
 The runner computes NEES using full covariance cross terms and unit-scaled
 Cholesky solves, plus orbital NEES and pre-update NIS. The figures show median
 and 5–95% position errors, pointwise 95% chi-square consistency intervals,
-marginal +/-3 sigma coverage and SRP estimation uncertainty. `ensemble.csv` and
-`summary.json` contain aggregates; four per-run CSVs and `study.json` retain the
-samples and configuration. See [montecarlo/README.md](montecarlo/README.md) for
+marginal +/-3 sigma coverage and first-gap error growth, always comparing
+eight and nine states. Four per-run CSVs and `study.json` retain the samples
+and configuration outside the plot directory. See [montecarlo/README.md](montecarlo/README.md) for
 assumptions, units and statistical interpretation. The tests cover correlated
 sampling, analytic/mixed-unit NEES and a two-run end-to-end study.
 
