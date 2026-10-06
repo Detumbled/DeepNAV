@@ -15,6 +15,99 @@ if(APPLE)
     add_compile_options("-gdwarf-4")
 endif()
 
+# Generic radio targets share this file; numerical use requires only Eigen.
+function(add_radiometric_targets)
+    find_package(Eigen3 CONFIG REQUIRED)
+    add_library(deepnav_radiometric STATIC
+        src/observations/radiometric/TwoWayLink.cpp
+        src/observations/radiometric/PropagationCorrections.cpp
+        src/observations/radiometric/TwoWayMeasurement.cpp
+        src/opnav/core/LightTimeSolver.cpp)
+    target_include_directories(deepnav_radiometric PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(deepnav_radiometric PUBLIC Eigen3::Eigen)
+    target_compile_features(deepnav_radiometric PUBLIC cxx_std_23)
+
+    if(DEEPNAV_RADIOMETRIC_WITH_CSPICE)
+        find_path(CSPICE_INCLUDE_DIR NAMES SpiceUsr.h
+            HINTS "$ENV{CSPICE_HOME}/include" "$ENV{CSPICE_HOME}/cspice/include")
+        find_library(CSPICE_LIB NAMES cspice cspice.a
+            HINTS "$ENV{CSPICE_HOME}/lib" "$ENV{CSPICE_HOME}/cspice/lib")
+        if(NOT CSPICE_INCLUDE_DIR OR NOT CSPICE_LIB)
+            message(FATAL_ERROR "CSPICE adapter requested: set CSPICE_HOME or CSPICE_INCLUDE_DIR/CSPICE_LIB.")
+        endif()
+        add_library(deepnav_radiometric_spice STATIC
+            src/dynamics/SpiceStateProvider.cpp
+            src/dynamics/SpiceKernelSet.cpp
+            src/observations/radiometric/SpiceLightTime.cpp)
+        target_include_directories(deepnav_radiometric_spice PUBLIC ${CSPICE_INCLUDE_DIR})
+        target_link_libraries(deepnav_radiometric_spice PUBLIC deepnav_radiometric ${CSPICE_LIB})
+    endif()
+endfunction()
+
+# Numerical dynamics/filter targets are also available without CSPICE or graphics.
+find_package(Eigen3 CONFIG REQUIRED)
+set(CLOCK_SOURCES
+    src/Clocks/Clocks.cpp
+    src/Clocks/ClockHistory.cpp
+    src/Clocks/ClockModel.cpp
+    src/Clocks/LocalOscillator.cpp
+    src/Clocks/DSAC.cpp
+    src/Clocks/ClockTruthSimulator.cpp
+    src/Clocks/Allan.cpp
+    src/Clocks/Calibration.cpp
+)
+set(CLOCK_CSV_SOURCES src/utils/ClockCsvWriter.cpp)
+
+add_library(deepnav_clocks STATIC ${CLOCK_SOURCES})
+target_include_directories(deepnav_clocks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(deepnav_clocks PUBLIC Eigen3::Eigen)
+
+set(EKF_SOURCES
+    src/dynamics/EphemerisInterpolator.cpp
+    src/dynamics/IntegratedStateProvider.cpp
+    src/RKF45Integrator.cpp
+    src/filters/filter.cpp
+    src/filters/EKF.cpp
+    src/filters/CartesianPropagator.cpp
+    src/observations/GeometricRadiometricModel.cpp
+    src/perturbations/ForceModel.cpp
+    src/perturbations/GravitationalModel.cpp
+    src/perturbations/SRPModel.cpp
+    src/perturbations/Eclipse.cpp
+    src/perturbations/J2.cpp
+)
+
+# Reusable numerical filtering target without CSPICE or graphics linkage.
+add_library(deepnav_ekf STATIC ${EKF_SOURCES})
+target_include_directories(deepnav_ekf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(deepnav_ekf PUBLIC Eigen3::Eigen deepnav_clocks)
+
+
+# Build the reusable radio model without configuring the full application's
+# graphics/SPICE dependencies. Voyager's demo is not part of these targets.
+option(DEEPNAV_RADIOMETRIC_ONLY "Build only reusable radio targets and their tests" OFF)
+option(DEEPNAV_RADIOMETRIC_WITH_CSPICE "Build the optional CSPICE radio adapter" ON)
+if(DEEPNAV_RADIOMETRIC_ONLY)
+    add_radiometric_targets()
+    add_executable(test_two_way_link tests/test_two_way_link.cpp src/dynamics/LinearStateProvider.cpp)
+    target_link_libraries(test_two_way_link PRIVATE deepnav_radiometric)
+    add_test(NAME test_two_way_link COMMAND test_two_way_link)
+    add_executable(test_radiometric_navigation tests/test_radiometric_navigation.cpp
+        src/dynamics/LinearStateProvider.cpp)
+    target_link_libraries(test_radiometric_navigation PRIVATE deepnav_radiometric deepnav_ekf)
+    add_test(NAME test_radiometric_navigation COMMAND test_radiometric_navigation)
+    add_executable(test_ekf tests/test_ekf.cpp)
+    target_link_libraries(test_ekf PRIVATE deepnav_ekf)
+    add_test(NAME test_ekf COMMAND test_ekf)
+    if(DEEPNAV_RADIOMETRIC_WITH_CSPICE)
+        add_executable(cassini_two_way_demo cassini_two_way_demo.cpp)
+        target_link_libraries(cassini_two_way_demo PRIVATE deepnav_radiometric_spice)
+        target_compile_definitions(cassini_two_way_demo PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME test_cassini_two_way_benchmark COMMAND cassini_two_way_demo --samples 3)
+    endif()
+    return()
+endif()
+
 # ------------------------------
 # 2. Dependencies (Eigen, GLFW, GLEW, OpenGL)
 # ------------------------------
@@ -127,39 +220,7 @@ endif()
 # ------------------------------
 # 6. Static Library (Astro functions)
 # ------------------------------
-set(CLOCK_SOURCES
-    src/Clocks/Clocks.cpp
-    src/Clocks/ClockHistory.cpp
-    src/Clocks/ClockModel.cpp
-    src/Clocks/LocalOscillator.cpp
-    src/Clocks/DSAC.cpp
-    src/Clocks/ClockTruthSimulator.cpp
-    src/Clocks/Allan.cpp
-    src/Clocks/Calibration.cpp
-)
-set(CLOCK_CSV_SOURCES src/utils/ClockCsvWriter.cpp)
-
-add_library(deepnav_clocks STATIC ${CLOCK_SOURCES})
-target_include_directories(deepnav_clocks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(deepnav_clocks PUBLIC Eigen3::Eigen)
-
-set(EKF_SOURCES
-    src/RKF45Integrator.cpp
-    src/filters/filter.cpp
-    src/filters/EKF.cpp
-    src/filters/CartesianPropagator.cpp
-    src/observations/GeometricRadiometricModel.cpp
-    src/perturbations/ForceModel.cpp
-    src/perturbations/GravitationalModel.cpp
-    src/perturbations/SRPModel.cpp
-    src/perturbations/Eclipse.cpp
-    src/perturbations/J2.cpp
-)
-
-# Reusable numerical filtering target without CSPICE or graphics linkage.
-add_library(deepnav_ekf STATIC ${EKF_SOURCES})
-target_include_directories(deepnav_ekf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(deepnav_ekf PUBLIC Eigen3::Eigen deepnav_clocks)
+add_radiometric_targets()
 
 set(BIG_FUNCTIONS_SOURCE_CANDIDATES
     ${CLOCK_SOURCES}
@@ -211,9 +272,10 @@ foreach(candidate_src IN LISTS BIG_FUNCTIONS_SOURCE_CANDIDATES)
     endif()
 endforeach()
 
-list(REMOVE_ITEM BIG_FUNCTIONS_SOURCES ${EKF_SOURCES} ${CLOCK_SOURCES})
+list(REMOVE_ITEM BIG_FUNCTIONS_SOURCES ${EKF_SOURCES} ${CLOCK_SOURCES}
+    src/opnav/core/LightTimeSolver.cpp)
 add_library(big_functions STATIC ${BIG_FUNCTIONS_SOURCES})
-target_link_libraries(big_functions PUBLIC project_dependencies deepnav_ekf)
+target_link_libraries(big_functions PUBLIC project_dependencies deepnav_ekf deepnav_radiometric)
 
 # ------------------------------
 # 7. Executables
@@ -242,6 +304,12 @@ set(APP_SOURCE_CANDIDATES
     tests/test_spice_environment.cpp
     tests/test_earth_orbit_scenario.cpp
     ekf_demo.cpp
+    cassini_two_way_demo.cpp
+    cassini_two_way_ekf_demo.cpp
+    tests/test_two_way_link.cpp
+    tests/benchmark_two_way.cpp
+    tests/test_radiometric_navigation.cpp
+    tests/test_spice_radio_clock.cpp
     montecarlo/ekf_montecarlo.cpp
     tests/test_montecarlo.cpp
 
@@ -259,12 +327,32 @@ foreach(app_src IN LISTS APP_SOURCES)
     get_filename_component(app_name "${app_src}" NAME_WE)
     add_executable(${app_name} "${app_src}")
 
-    if(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "ekf_montecarlo"
+    if(app_name STREQUAL "cassini_two_way_demo" OR app_name STREQUAL "cassini_two_way_ekf_demo")
+        if(NOT DEEPNAV_RADIOMETRIC_WITH_CSPICE)
+            message(FATAL_ERROR "The full demo build requires DEEPNAV_RADIOMETRIC_WITH_CSPICE=ON.")
+        endif()
+        target_link_libraries(${app_name} PRIVATE deepnav_radiometric_spice deepnav_ekf)
+        target_compile_definitions(${app_name} PRIVATE
+            DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    elseif(app_name STREQUAL "ekf_demo" OR app_name STREQUAL "ekf_montecarlo"
        OR app_name STREQUAL "test_spice_environment"
        OR app_name STREQUAL "test_earth_orbit_scenario")
         target_link_libraries(${app_name} PRIVATE big_functions)
         target_compile_definitions(${app_name} PRIVATE
             DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    elseif(app_name STREQUAL "benchmark_two_way")
+        target_sources(${app_name} PRIVATE src/dynamics/LinearStateProvider.cpp)
+        target_link_libraries(${app_name} PRIVATE deepnav_radiometric_spice)
+        target_compile_definitions(${app_name} PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    elseif(app_name STREQUAL "test_spice_radio_clock")
+        target_link_libraries(${app_name} PRIVATE deepnav_radiometric_spice)
+        target_compile_definitions(${app_name} PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    elseif(app_name STREQUAL "test_radiometric_navigation")
+        target_sources(${app_name} PRIVATE src/dynamics/LinearStateProvider.cpp)
+        target_link_libraries(${app_name} PRIVATE deepnav_radiometric deepnav_ekf)
+    elseif(app_name STREQUAL "test_two_way_link")
+        target_sources(${app_name} PRIVATE src/dynamics/LinearStateProvider.cpp)
+        target_link_libraries(${app_name} PRIVATE deepnav_radiometric)
     elseif(app_name STREQUAL "test_montecarlo")
         target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/montecarlo)
         target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)
@@ -351,3 +439,9 @@ endforeach()
 
 add_test(NAME test_montecarlo_runner COMMAND ekf_montecarlo --runs 2
     --output "${CMAKE_BINARY_DIR}/Output_montecarlo_smoke")
+
+add_test(NAME test_cassini_two_way_benchmark COMMAND cassini_two_way_demo --samples 3)
+
+add_test(NAME test_cassini_two_way_ekf_smoke COMMAND cassini_two_way_ekf_demo --hours 0.5 --truth matched
+    --acceleration-noise-density 0
+    --output "${CMAKE_BINARY_DIR}/Output_cassini_ekf_smoke")

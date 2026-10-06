@@ -1104,6 +1104,36 @@ The baseline remains a DSAC-inspired short-term white-FM continuation, not a
 hardware fit or a validated long-term stability model. The six-state case has an
 ideal spacecraft clock.
 
+#### Cassini coherent two-way console demo
+
+`cassini_two_way_demo` uses the local Cassini reconstruction and DSN kernels to
+solve independent retarded uplink/downlink legs, a configurable coherent X/X
+transponder (`880/749`), linear uplink ramps and finite Doppler phase counts.
+It benchmarks CSPICE `CN` against the existing light-time solver, then reports
+solar Shapiro and illustrative troposphere corrections. All diagnostics go to
+console; there are no plots or output files.
+
+```sh
+cmake --build build-clang --target cassini_two_way_demo test_two_way_link -j 4
+./build-clang/cassini_two_way_demo
+```
+
+For a 24-hour arc with a six-state EKF and only position RMS/NIS plots:
+
+```sh
+cmake --build build-clang --target cassini_two_way_ekf_demo -j 4
+./build-clang/cassini_two_way_ekf_demo
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python tests/plot_cassini_two_way_ekf.py
+```
+
+The long-arc driver uses reconstructed Cassini SPK truth and a separate numerical
+estimate. All targets stay in the root `CMakeLists.txt`; use `build-clang/` with
+`CMAKE_BUILD_TYPE=Release` for timing runs.
+
+See [the two-way demo documentation](docs/cassini_two_way_demo.md) for module
+interfaces, conventions, test coverage, options and remaining fidelity inputs.
+The short console benchmark remains separate from the Earth-orbit EKF demo.
+
 #### Controlled model mismatch
 
 The default case is `--mismatch matched`. The simulated truth, initial conditions,
