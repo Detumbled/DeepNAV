@@ -22,6 +22,9 @@ function(add_radiometric_targets)
         src/observations/radiometric/TwoWayLink.cpp
         src/observations/radiometric/PropagationCorrections.cpp
         src/observations/radiometric/TwoWayMeasurement.cpp
+        src/observations/radiometric/EndpointClock.cpp
+        src/observations/radiometric/OneWayLink.cpp
+        src/observations/radiometric/OneWayMeasurement.cpp
         src/opnav/core/LightTimeSolver.cpp)
     target_include_directories(deepnav_radiometric PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(deepnav_radiometric PUBLIC Eigen3::Eigen)
@@ -41,6 +44,29 @@ function(add_radiometric_targets)
             src/observations/radiometric/SpiceLightTime.cpp)
         target_include_directories(deepnav_radiometric_spice PUBLIC ${CSPICE_INCLUDE_DIR})
         target_link_libraries(deepnav_radiometric_spice PUBLIC deepnav_radiometric ${CSPICE_LIB})
+        add_library(deepnav_wls_spice STATIC src/filters/WLS.cpp
+            src/filters/BatchLeastSquaresDriver.cpp src/stations/StationCatalog.cpp)
+        target_include_directories(deepnav_wls_spice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CSPICE_INCLUDE_DIR})
+        target_link_libraries(deepnav_wls_spice PUBLIC deepnav_ekf ${CSPICE_LIB})
+        add_executable(test_one_way_batch_baseline tests/test_one_way_batch_baseline.cpp)
+        target_link_libraries(test_one_way_batch_baseline PRIVATE deepnav_wls_spice)
+        add_test(NAME test_one_way_batch_baseline COMMAND test_one_way_batch_baseline)
+        add_executable(compare_cassini_spk benchmarks/cassini_trajectory/compare_spk.cpp)
+        target_link_libraries(compare_cassini_spk PRIVATE deepnav_radiometric_spice deepnav_ekf)
+        target_compile_definitions(compare_cassini_spk PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        # The per-stage EIH/ring sums are costly without Eigen inlining, even
+        # when the surrounding development build retains debug information.
+        target_compile_options(compare_cassini_spk PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        add_executable(cassini_two_way_wls benchmarks/cassini_two_way_wls/baseline.cpp)
+        target_link_libraries(cassini_two_way_wls PRIVATE deepnav_radiometric_spice deepnav_wls_spice)
+        target_compile_definitions(cassini_two_way_wls PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_options(cassini_two_way_wls PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        add_test(NAME test_cassini_two_way_wls_smoke COMMAND cassini_two_way_wls
+            --days 0.25 --truth simulation --no-noise
+            --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-two-way-wls-smoke)
+        set_tests_properties(test_cassini_two_way_wls_smoke PROPERTIES TIMEOUT 180)
+        add_executable(compare_gmat_two_way benchmarks/gmat/compare_gmat_two_way.cpp)
+        target_link_libraries(compare_gmat_two_way PRIVATE deepnav_radiometric_spice)
     endif()
 endfunction()
 
@@ -96,6 +122,9 @@ if(DEEPNAV_RADIOMETRIC_ONLY)
         src/dynamics/LinearStateProvider.cpp)
     target_link_libraries(test_radiometric_navigation PRIVATE deepnav_radiometric deepnav_ekf)
     add_test(NAME test_radiometric_navigation COMMAND test_radiometric_navigation)
+    add_executable(test_one_way_link tests/test_one_way_link.cpp src/dynamics/LinearStateProvider.cpp)
+    target_link_libraries(test_one_way_link PRIVATE deepnav_radiometric deepnav_ekf)
+    add_test(NAME test_one_way_link COMMAND test_one_way_link)
     add_executable(test_ekf tests/test_ekf.cpp)
     target_link_libraries(test_ekf PRIVATE deepnav_ekf)
     add_test(NAME test_ekf COMMAND test_ekf)
@@ -307,6 +336,7 @@ set(APP_SOURCE_CANDIDATES
     cassini_two_way_demo.cpp
     cassini_two_way_ekf_demo.cpp
     tests/test_two_way_link.cpp
+    tests/test_one_way_link.cpp
     tests/benchmark_two_way.cpp
     tests/test_radiometric_navigation.cpp
     tests/test_spice_radio_clock.cpp
@@ -350,9 +380,12 @@ foreach(app_src IN LISTS APP_SOURCES)
     elseif(app_name STREQUAL "test_radiometric_navigation")
         target_sources(${app_name} PRIVATE src/dynamics/LinearStateProvider.cpp)
         target_link_libraries(${app_name} PRIVATE deepnav_radiometric deepnav_ekf)
-    elseif(app_name STREQUAL "test_two_way_link")
+    elseif(app_name STREQUAL "test_two_way_link" OR app_name STREQUAL "test_one_way_link")
         target_sources(${app_name} PRIVATE src/dynamics/LinearStateProvider.cpp)
         target_link_libraries(${app_name} PRIVATE deepnav_radiometric)
+        if(app_name STREQUAL "test_one_way_link")
+            target_link_libraries(${app_name} PRIVATE deepnav_ekf)
+        endif()
     elseif(app_name STREQUAL "test_montecarlo")
         target_include_directories(${app_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/montecarlo)
         target_link_libraries(${app_name} PRIVATE Eigen3::Eigen)

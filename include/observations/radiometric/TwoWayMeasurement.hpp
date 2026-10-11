@@ -1,12 +1,10 @@
 #pragma once
 #include "filters/EKFTypes.hpp"
 #include "observations/radiometric/TwoWayLink.hpp"
-#include <memory>
+#include "observations/radiometric/TrajectoryFactory.hpp"
 namespace fd::observations::radiometric {
 // Build a trajectory around an estimated state at its reference epoch. The
 // factory owns propagation/latency choices and must cover all retarded epochs.
-using TrajectoryFactory = std::function<std::unique_ptr<dynamics::StateProvider>(
-    double stateEpochTdb, const Eigen::VectorXd &state)>;
 class TwoWayMeasurement {
   public:
     TwoWayMeasurement(TwoWayLink link, const dynamics::StateProvider &station, double receptionTdb,

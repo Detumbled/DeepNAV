@@ -1,0 +1,80 @@
+% Independent GMAT observation benchmark. Render with run_benchmark.py.
+SolarSystem.EphemerisSource = 'SPICE';
+SolarSystem.SPKFilename = '@ROOT@/Kernels/de442.bsp';
+Create CoordinateSystem SSBFrame;
+SSBFrame.Origin = SolarSystemBarycenter;
+SSBFrame.Axes = MJ2000Eq;
+Create Spacecraft Probe;
+Probe.DateFormat = UTCGregorian;
+Probe.Epoch = '10 Oct 2004 15:20:00.000';
+Probe.NAIFId = -82;
+Probe.OrbitSpiceKernelName = {'@ROOT@/Kernels/Cassini/spk/200128RU_SCPSE_04251_04303.bsp'};
+Create Propagator Eph;
+Eph.Type = SPK;
+Eph.StepSize = @STEP@;
+Eph.StartEpoch = FromSpacecraft;
+Earth.NutationUpdateInterval = 0;
+Create GroundStation DSN;
+DSN.StateType = Cartesian;
+DSN.Location1 = -2353.621251;
+DSN.Location2 = -4641.341542;
+DSN.Location3 = 3677.052370;
+
+% A coherent spacecraft transponder; delay is in seconds.
+Create Antenna HGA DSNAntenna;
+Create Transponder CassiniTransponder;
+CassiniTransponder.PrimaryAntenna = HGA;
+CassiniTransponder.HardwareDelay = @DELAY@;
+CassiniTransponder.TurnAroundRatio = '880/749';
+Probe.AddHardware = {HGA, CassiniTransponder};
+Create Transmitter DSNTransmitter;
+DSNTransmitter.PrimaryAntenna = DSNAntenna;
+DSNTransmitter.Frequency = 7175; % MHz
+Create Receiver DSNReceiver;
+DSNReceiver.PrimaryAntenna = DSNAntenna;
+DSN.AddHardware = {DSNAntenna, DSNTransmitter, DSNReceiver};
+DSN.Id = '14';
+Probe.Id = '82';
+DSN.MinimumElevationAngle = 7;
+DSN.TroposphereModel = 'None';
+DSN.IonosphereModel = 'None';
+Create ErrorModel RangeError DopplerError;
+RangeError.Type = 'Range'; % full round-trip km, divide by TWO for DeepNAV
+RangeError.Bias = 0;
+DopplerError.Type = 'DSN_TCP'; % negative mean received carrier Hz
+DopplerError.Bias = 0;
+DSN.ErrorModels = {RangeError, DopplerError};
+Create TrackingFileSet Measurements;
+Measurements.AddTrackingConfig = {{DSN, Probe, DSN}, 'Range'};
+Measurements.AddTrackingConfig = {{DSN, Probe, DSN}, 'DSN_TCP'};
+Measurements.FileName = {'@OUTPUT@/measurements.gmd'};
+Measurements.UseLightTime = true;
+Measurements.UseRelativityCorrection = false;
+Measurements.UseETminusTAI = false;
+Measurements.SimDopplerCountInterval = 60;
+Create Simulator Sim;
+Sim.AddData = {Measurements};
+Sim.EpochFormat = UTCGregorian;
+Sim.InitialEpoch = '10 Oct 2004 18:13:06.046';
+Sim.FinalEpoch = '10 Oct 2004 18:33:06.046';
+Sim.MeasurementTimeStep = 600;
+Sim.Propagator = Eph;
+Sim.AddNoise = Off;
+% Export the same barycentric trajectories used by GMAT, so the comparison
+% measures observation modelling rather than different Earth rotation models.
+Create ReportFile States;
+States.Filename = '@OUTPUT@/states.csv';
+States.Precision = 16;
+States.Delimiter = ',';
+States.FixedWidth = Off;
+Create Variable SampleIndex;
+BeginMissionSequence;
+% Initialize SPK at the explicitly chosen epoch, NOT the kernel start epoch.
+Propagate Eph(Probe) {Probe.ElapsedSecs = @STEP@};
+SampleIndex = 0;
+While SampleIndex < @SAMPLES@;
+  Report States Probe.TDBModJulian Probe.SSBFrame.X Probe.SSBFrame.Y Probe.SSBFrame.Z Probe.SSBFrame.VX Probe.SSBFrame.VY Probe.SSBFrame.VZ DSN.SSBFrame.X DSN.SSBFrame.Y DSN.SSBFrame.Z DSN.SSBFrame.VX DSN.SSBFrame.VY DSN.SSBFrame.VZ;
+  Propagate Eph(Probe) {Probe.ElapsedSecs = @STEP@};
+  SampleIndex = SampleIndex + 1;
+EndWhile;
+RunSimulator Sim;

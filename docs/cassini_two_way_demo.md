@@ -1,5 +1,9 @@
 # Cassini coherent two-way console demo
 
+For the retained 9–23 October 2004 simulation and an eight-parameter batch WLS
+(six initial-state components plus SRP and thermal scales),
+see [the two-week baseline](../benchmarks/cassini_two_way_wls/README.md).
+
 Build and run from any working directory:
 
 ```sh
@@ -212,3 +216,30 @@ scalar observations), mean NIS about 1.36 and final running position RMS about
 does not establish full-state recovery; weak geometry and force-model mismatch
 need further investigation. This figure is a diagnostic result, not a validated
 navigation-accuracy claim.
+
+To plot the saved C++ EKF prefit innovations by station, without GMAT:
+
+```sh
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python tests/plot_cassini_two_way_innovations.py
+```
+
+The script reads only `diagnostics.csv` and `summary.json` from
+`Output EKF/Cassini two-way/`. Innovations are synthetic observation minus the
+measurement prediction before the EKF update. Full plots retain all 130 range/
+Doppler pairs, including the initial DSS-14 innovations of +920.455 m and
+-0.491857 Hz caused by the deliberately offset initial state. Additional zoom
+plots use common linear axes and explicitly label the two initial points that
+fall outside the displayed limits. Outputs are `cpp_innovations_by_station`
+and `cpp_innovations_DSS-14`, `_DSS-43`, `_DSS-63`, each as PNG/PDF, plus `_zoom`
+versions. These innovations assess filter behaviour on synthetic measurements;
+they are not an independent validation of the shared observation model.
+
+The original schedule selects the station maximizing the minimum elevation
+over both legs and both count endpoints, subject to a 10-degree cutoff. DSS-14
+is selected at 0–1.667 h and 17.833–24 h. At intervening sampled epochs it is
+either below the cutoff or another station has better geometry. An independent
+SPICE CN geometry check reproduced all 145 saved station/tracking choices;
+its table is `visibility_check.csv`, with a plot `cpp_station_visibility.png`.
+This check uses no GMAT data. The C++ innovations at 19–20.5 h do not exhibit
+the 0.1–0.3 Hz discontinuities seen in the GMAT comparison, whose cause remains
+unresolved.

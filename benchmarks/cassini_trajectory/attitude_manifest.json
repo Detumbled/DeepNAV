@@ -1,0 +1,79 @@
+{
+  "start_utc": "2004-10-09T00:00:00",
+  "end_utc": "2004-10-23T00:00:00.000",
+  "ck_id": -82000,
+  "frame": "CASSINI_SC_COORD",
+  "reference": "J2000",
+  "sclk": "cas00172.tsc",
+  "files": [
+    {
+      "path": "Kernels/Cassini/ck/04256_04292py_as_flown.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04256_04292py_as_flown.bc",
+      "sha256": "ef85c6e64726cddadeffc1041d1e3cb51fd657b4843521fdf881531158ca0a71",
+      "bytes": 33198080,
+      "type": "predicted_from_as_flown_sequence",
+      "intervals": 1
+    },
+    {
+      "path": "Kernels/Cassini/ck/04292_04320py_as_flown.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04292_04320py_as_flown.bc",
+      "sha256": "75fe7bea3e3ced35794ccc6849bf3f421e8ed7d65f199371e65484e49b847fd6",
+      "bytes": 25822208,
+      "type": "predicted_from_as_flown_sequence",
+      "intervals": 1
+    },
+    {
+      "path": "Kernels/Cassini/ck/04281_04286ra.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04281_04286ra.bc",
+      "sha256": "5837676db7dbdd84e1b4a37d494b642620d0b8c5fbac74583c1fc4691f703df1",
+      "bytes": 6710272,
+      "type": "reconstructed",
+      "intervals": 43
+    },
+    {
+      "path": "Kernels/Cassini/ck/04286_04291ra.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04286_04291ra.bc",
+      "sha256": "a65019f793864864626777aa57b4cc98df8dd03bb1a5cb344098fe220be81d58",
+      "bytes": 6913024,
+      "type": "reconstructed",
+      "intervals": 8
+    },
+    {
+      "path": "Kernels/Cassini/ck/04291_04296ra.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04291_04296ra.bc",
+      "sha256": "809f366ebe47487651144b03e2a1f8045f70cd8887006a92ffde31ff279beafd",
+      "bytes": 5821440,
+      "type": "reconstructed",
+      "intervals": 75
+    },
+    {
+      "path": "Kernels/Cassini/ck/04296_04301ra.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04296_04301ra.bc",
+      "sha256": "cfd21acc54930fc9ca5b18ac508a682d083ffc1aac72fa4af802378afd1e7b1e",
+      "bytes": 6719488,
+      "type": "reconstructed",
+      "intervals": 181
+    },
+    {
+      "path": "Kernels/Cassini/ck/04293_04298ra.bc",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/CASSINI/kernels/ck/04293_04298ra.bc",
+      "sha256": "d44c632508de8fd50f0587c240b750ad916cd5ac4042e708e49836d8e441da78",
+      "bytes": 5896192,
+      "type": "reconstructed",
+      "intervals": 71
+    }
+  ],
+  "reconstructed_seconds": 1136516.2531454265,
+  "as_flown_seconds": 73077.43783149123,
+  "gap_seconds": 6.309023082256317,
+  "max_bridge_seconds": 10,
+  "gaps": [
+    {
+      "start_utc": "2004-10-18T09:29:53.690977",
+      "end_utc": "2004-10-18T09:30:00.000000",
+      "seconds": 6.309023082256317
+    }
+  ],
+  "clock_note": "Reconstructed CKs were produced with cas00086.tsc; encoded ticks are consistently mapped here with the later cas00172.tsc, also used to generate the as-flown CKs. UTC coverage is recomputed with this correlation.",
+  "policy": "Reconstructed priority; predicted as-flown sequence only in telemetry gaps; SLERP only for bounded gaps <=10 s, no extrapolation."
+}

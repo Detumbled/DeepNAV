@@ -21,3 +21,7 @@ AGENTS.md
 __pycache__/
 /montecarlo/data/
 /.venv-cassini/
+
+/results/
+/tests/*.csv
+/tests/voyager_*.svg

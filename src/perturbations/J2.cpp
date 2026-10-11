@@ -28,4 +28,14 @@ AccelerationEvaluation j2Gravity(double mu, double equatorialRadius, double j2,
         throw std::runtime_error("J2 acceleration/partials overflowed.");
     return result;
 }
+AccelerationEvaluation j2OriginCorrection(double centralGM, double moonGM, double radius,
+                                         double j2, const Eigen::Vector3d& moonPosition,
+                                         const Eigen::Vector3d& pole) {
+    if (!std::isfinite(moonGM) || moonGM<0)
+        throw std::invalid_argument("Invalid moon GM");
+    const auto direct=j2Gravity(centralGM,radius,j2,moonPosition,pole);
+    AccelerationEvaluation result;
+    result.acceleration=(moonGM/centralGM)*direct.acceleration;
+    return result;
+}
 } // namespace fd::perturbations

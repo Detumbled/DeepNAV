@@ -744,11 +744,8 @@ centroid and full physical parameter covariance against scatter.
 
 #### Real Cassini image diagnostic
 
-![Cassini optical navigation: observed image, circular and elliptical Gaussian fits, and residual comparison](docs/images/cassini_centroid_comparison.png)
+Generate optical-navigation comparison figures with the plotting commands below.
 
-*Circular and rotated elliptical fits to a Cassini ISS image, with shared color
-scales for comparison. Structured residuals reveal the remaining model mismatch.
-Source image: NASA/JPL-Caltech/Space Science Institute.*
 
 `loadCassiniImage` in `include/opnav/image/CassiniImage.hpp` reads an original
 Cassini PDS3 `.IMG` with its detached `.LBL` (same basename). The supported EDR
@@ -1474,8 +1471,7 @@ CSV contains truth-estimate state error at the arc cadence. The observability
 CSV contains contiguous station visibility windows from the elevation-masked
 observation schedule. The WLS CSVs contain residuals and state-error summaries
 for each solver iteration, while `posterior_covariance.csv` stores the final
-6-by-6 state covariance. Historical non-VLBI CSVs without the `_VLBI` suffix
-may be kept for comparison plots.
+6-by-6 state covariance. Generated results are disposable and should not be committed.
 
 Run the companion diagnostics from the repository root after generating the
 CSVs:
@@ -1486,21 +1482,23 @@ python3 tests/analyze_posterior_covariance.py
 python3 tests/plot_vlbi_comparison.py
 ```
 
-Latest verified `jup310.bsp` run:
-
-```text
-Active third bodies: 599 501 502 503 504 6
-Prior position error:      70.710678 km
-Posterior position error:  5.766723 km
-Solver status:             CONVERGED in 5 iterations
-Solver weighted RMS:       0.694371
-Range RMS:                 150770.580 m -> 9.671 m
-Range-rate RMS:            528.089 mm/s -> 0.179 mm/s
-VLBI RMS:                  1.598 m -> 1.005 m
-```
-
 This is a diagnostic OD test, not a final high-precision solution. The longer
 visibility-filtered arc intentionally keeps state truth error as a report
 diagnostic rather than a hard test assertion; use residuals and future
 conditioning diagnostics before interpreting state accuracy from residual
 reduction alone.
+
+
+## Cassini two-week SPK propagation comparison
+
+Compare the official Cassini SPK with open-loop DeepNAV dynamics, including
+multibody gravity, Saturn J2, attitude-dependent HGA SRP and thermal recoil.
+The propagation starts from the exact SPK state, checks integration convergence,
+and records reconstructed/as-flown attitude coverage.
+See [the benchmark instructions](benchmarks/cassini_trajectory/README.md).
+
+The [two-week coherent two-way WLS baseline](benchmarks/cassini_two_way_wls/README.md)
+uses the retained simulation as truth for synthetic two-way range and counted
+Doppler. C++ estimates six initial-state components plus SRP and thermal-recoil
+scales, with DSN visibility and explicit noise/prior assumptions. It exports
+estimates and conditional covariance to CSV; Python analyzes and plots them.

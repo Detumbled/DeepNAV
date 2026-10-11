@@ -10,4 +10,10 @@ namespace fd::perturbations {
 j2Gravity(double mu, double equatorialRadius, double j2, const Eigen::Vector3d& position,
           const Eigen::Vector3d& pole = Eigen::Vector3d::UnitZ());
 
+// Minus the central body's reaction acceleration due to its J2 interaction
+// with a prescribed moon (Moyer 4.4.6). Independent of spacecraft state.
+[[nodiscard]] AccelerationEvaluation
+j2OriginCorrection(double centralGM, double moonGM, double radius, double j2,
+                   const Eigen::Vector3d& moonPosition, const Eigen::Vector3d& pole);
+
 } // namespace fd::perturbations

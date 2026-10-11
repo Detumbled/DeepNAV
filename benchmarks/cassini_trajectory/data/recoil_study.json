@@ -1,0 +1,241 @@
+{
+  "candidates": [
+    {
+      "name": "baseline",
+      "reference_vector_km_s2": [
+        0,
+        0,
+        -5.45e-12
+      ],
+      "full_rms_m": 109.13260944615746,
+      "train_rms_m": 28.74150967089857,
+      "holdout_rms_m": 151.67324878131672,
+      "endpoint_m": 249.203145443447,
+      "endpoint_velocity_mm_s": 0.4138276899146,
+      "endpoint_rtn_m": [
+        -29.730957492439618,
+        -241.1901911161166,
+        -55.18667932446775
+      ]
+    },
+    {
+      "name": "xminus",
+      "reference_vector_km_s2": [
+        -2.725e-13,
+        0,
+        -5.45e-12
+      ],
+      "full_rms_m": 85.90734564633507,
+      "train_rms_m": 25.622889288041126,
+      "holdout_rms_m": 118.78670714640528,
+      "endpoint_m": 192.4271489774876,
+      "endpoint_velocity_mm_s": 0.3397973532605,
+      "endpoint_rtn_m": [
+        7.815540804307588,
+        -169.6626628149552,
+        -90.45278233464786
+      ]
+    },
+    {
+      "name": "xplus",
+      "reference_vector_km_s2": [
+        2.725e-13,
+        0,
+        -5.45e-12
+      ],
+      "full_rms_m": 140.55468968312468,
+      "train_rms_m": 34.876282005360686,
+      "holdout_rms_m": 195.73778037475844,
+      "endpoint_m": 320.49589551875,
+      "endpoint_velocity_mm_s": 0.5096737951756001,
+      "endpoint_rtn_m": [
+        -67.27104108873297,
+        -312.72257289545075,
+        -19.920303131552632
+      ]
+    },
+    {
+      "name": "yminus",
+      "reference_vector_km_s2": [
+        0,
+        -2.725e-13,
+        -5.45e-12
+      ],
+      "full_rms_m": 106.19140083729492,
+      "train_rms_m": 23.005764712798985,
+      "holdout_rms_m": 148.44064155594077,
+      "endpoint_m": 249.867212615661,
+      "endpoint_velocity_mm_s": 0.4342717607474,
+      "endpoint_rtn_m": [
+        -122.177467327464,
+        -213.08127490069978,
+        -45.85477842557735
+      ]
+    },
+    {
+      "name": "yplus",
+      "reference_vector_km_s2": [
+        0,
+        2.725e-13,
+        -5.45e-12
+      ],
+      "full_rms_m": 127.46053636202353,
+      "train_rms_m": 36.963512937647174,
+      "holdout_rms_m": 176.46766605641173,
+      "endpoint_m": 283.9371755246702,
+      "endpoint_velocity_mm_s": 0.47087675408350005,
+      "endpoint_rtn_m": [
+        62.717112945242135,
+        -269.30256881039656,
+        -64.52139041327814
+      ]
+    },
+    {
+      "name": "zminus",
+      "reference_vector_km_s2": [
+        0,
+        0,
+        -5.7224999999999995e-12
+      ],
+      "full_rms_m": 129.39096169650006,
+      "train_rms_m": 36.19936855059388,
+      "holdout_rms_m": 179.41281115763778,
+      "endpoint_m": 280.3067581923806,
+      "endpoint_velocity_mm_s": 0.4350855600459,
+      "endpoint_rtn_m": [
+        5.083542744842721,
+        -216.98751981369315,
+        -177.37658392974294
+      ]
+    },
+    {
+      "name": "zplus",
+      "reference_vector_km_s2": [
+        0,
+        0,
+        -5.1775e-12
+      ],
+      "full_rms_m": 118.71820287011137,
+      "train_rms_m": 28.137737012216764,
+      "holdout_rms_m": 165.5581101820484,
+      "endpoint_m": 281.2291325667291,
+      "endpoint_velocity_mm_s": 0.4741791072302,
+      "endpoint_rtn_m": [
+        -64.54137065049248,
+        -265.395480726985,
+        67.00354683509747
+      ]
+    },
+    {
+      "name": "fit_z",
+      "reference_vector_km_s2": [
+        0,
+        0,
+        -5.292958318012443e-12
+      ],
+      "full_rms_m": 110.95963135895279,
+      "train_rms_m": 27.41041355191124,
+      "holdout_rms_m": 154.54519652484817,
+      "endpoint_m": 260.39911296107897,
+      "endpoint_velocity_mm_s": 0.4397667199218,
+      "endpoint_rtn_m": [
+        -49.794184728128066,
+        -255.13972524233975,
+        15.230160913176784
+      ]
+    },
+    {
+      "name": "fit_xyz",
+      "reference_vector_km_s2": [
+        -2.7249999999999995e-13,
+        -2.7249999999999995e-13,
+        -5.232237415805135e-12
+      ],
+      "full_rms_m": 78.17377214361214,
+      "train_rms_m": 14.023427203908184,
+      "holdout_rms_m": 109.68814126233352,
+      "endpoint_m": 196.99210426939808,
+      "endpoint_velocity_mm_s": 0.37978202332370004,
+      "endpoint_rtn_m": [
+        -112.45558026640141,
+        -160.8928675498985,
+        16.526245278439525
+      ]
+    }
+  ],
+  "selected": {
+    "name": "fit_xyz",
+    "reference_vector_km_s2": [
+      -2.7249999999999995e-13,
+      -2.7249999999999995e-13,
+      -5.232237415805135e-12
+    ],
+    "full_rms_m": 78.17377214361214,
+    "train_rms_m": 14.023427203908184,
+    "holdout_rms_m": 109.68814126233352,
+    "endpoint_m": 196.99210426939808,
+    "endpoint_velocity_mm_s": 0.37978202332370004,
+    "endpoint_rtn_m": [
+      -112.45558026640141,
+      -160.8928675498985,
+      16.526245278439525
+    ],
+    "provenance": "The selected three-component vector was estimated from the first seven days with each adjustment bounded to 5% of the nominal Z magnitude. No initial-state parameters were fitted. The second half was excluded from coefficient estimation but used in the requested full-arc candidate selection; it is not an independent final validation.",
+    "nominal_refined_maximum_m": 0.0013836377053987505,
+    "reintegration_full_rms_m": 78.17377214361214
+  },
+  "mass_kg": 3220,
+  "gravity_mask": 2,
+  "start_utc": "2004-10-09T00:00:00",
+  "duration_days": 14,
+  "training_end_elapsed_s": 604800,
+  "training_samples": 1009,
+  "holdout_samples": 1008,
+  "reference_mass_kg": 2781,
+  "reference_utc": "2005-08-13T00:00:00",
+  "nominal_reference_vector_km_s2": [
+    0,
+    0,
+    -5.45e-12
+  ],
+  "component_adjustment_bound_km_s2": 2.725e-13,
+  "fit_method": "Bounded linear least squares of first-seven-day Cartesian position residuals, central finite-difference trajectory sensitivities; candidates verified by nonlinear reintegration.",
+  "fits": {
+    "fit_z": {
+      "reference_vector_km_s2": [
+        0.0,
+        0.0,
+        -5.292958318012443e-12
+      ],
+      "normalized_changes": [
+        0.0,
+        0.0,
+        0.5762997504130515
+      ],
+      "linear_train_rms_m": 27.410728550548498,
+      "linear_holdout_rms_m": 154.54486373725734
+    },
+    "fit_xyz": {
+      "reference_vector_km_s2": [
+        -2.7249999999999995e-13,
+        -2.7249999999999995e-13,
+        -5.232237415805135e-12
+      ],
+      "normalized_changes": [
+        -0.9999999999999999,
+        -0.9999999999999999,
+        0.7991287493389545
+      ],
+      "linear_train_rms_m": 14.023768304875855,
+      "linear_holdout_rms_m": 109.68724258998712
+    }
+  },
+  "sensitivity_diagnostics": {
+    "singular_values_m": [
+      529.5425491141322,
+      340.54001079664334,
+      254.5160984511475
+    ],
+    "condition_number": 2.0805856774351503
+  }
+}

@@ -3,6 +3,10 @@
 #include "perturbations/Gravitational.hpp"
 #include "perturbations/J2.hpp"
 #include "perturbations/SRP.hpp"
+#include "perturbations/FlatPlateSRP.hpp"
+#include "perturbations/ThermalRecoil.hpp"
+#include "perturbations/AnnularGravity.hpp"
+#include "perturbations/Relativistic.hpp"
 #include <Eigen/Geometry>
 #include <cmath>
 #include <iostream>
@@ -47,6 +51,66 @@ void checkPartials(const AccelerationFunction& model, const Eigen::Vector3d& pos
     relativeNear(model(0, position, Eigen::Vector3d::Zero()).positionJacobian, numeric, 1e-6);
 }
 
+void gravityCompletion() {
+    const Eigen::Vector3d moon(180000,24000,-11000), pole=Eigen::Vector3d::UnitZ();
+    constexpr double mu=37931206.159, moonGM=2.5036;
+    const auto direct=j2Gravity(mu,60330,.01629,moon,pole);
+    const auto correction=j2OriginCorrection(mu,moonGM,60330,.01629,moon,pole);
+    relativeNear(mu*correction.acceleration,moonGM*direct.acceleration,1e-14);
+    require(correction.positionJacobian.isZero() && correction.velocityJacobian.isZero(),
+            "Prescribed origin correction must have zero spacecraft partials");
+    require(j2OriginCorrection(mu,0,60330,.01629,moon,pole).acceleration.isZero(),"Zero moon GM");
+    require(j2OriginCorrection(mu,moonGM,60330,0,moon,pole).acceleration.isZero(),"Zero J2");
+    const Eigen::Matrix3d rotation=Eigen::AngleAxisd(.73,Eigen::Vector3d(1,2,3).normalized()).toRotationMatrix();
+    relativeNear(j2OriginCorrection(mu,moonGM,60330,.01629,rotation*moon,rotation*pole).acceleration,
+                 rotation*correction.acceleration,1e-14);
+    rejects([&]{ (void)j2OriginCorrection(mu,-1,60330,.01629,moon,pole); });
+
+    const AnnularGravity ring(1.123,2,3);
+    const double z=5;
+    const Eigen::Vector3d axisExpected(0,0,-2*1.123/(9-4)*z*(1/std::sqrt(z*z+4)-1/std::sqrt(z*z+9)));
+    relativeNear(ring.acceleration({0,0,z},pole),axisExpected,1e-13);
+    const Eigen::Vector3d r(4.1,1.2,2.7);
+    // Independent direct Newton integration, uniform bins in radius squared.
+    Eigen::Vector3d quadrature=Eigen::Vector3d::Zero();
+    constexpr int nr=512, na=256;
+    for(int i=0;i<nr;++i) for(int j=0;j<na;++j) {
+        const double radius=std::sqrt(4+5*(i+.5)/nr), angle=2*std::numbers::pi*(j+.5)/na;
+        const Eigen::Vector3d d=Eigen::Vector3d(radius*std::cos(angle),radius*std::sin(angle),0)-r;
+        quadrature+=1.123/(nr*na)*d/std::pow(d.norm(),3);
+    }
+    relativeNear(ring.acceleration(r,pole),quadrature,1e-6);
+    relativeNear(ring.acceleration(rotation*r,rotation*pole),rotation*ring.acceleration(r,pole),1e-14);
+    relativeNear(ring.acceleration({1e5,0,0},pole),Eigen::Vector3d(-1.123/1e10,0,0),1e-8);
+    require(AnnularGravity(0,2,3).acceleration(r,pole).isZero(),"Zero ring GM");
+    rejects([&]{ (void)ring.acceleration({3,0,0},pole); });
+
+    constexpr double c=299792.458, mass=100;
+    const Eigen::Vector3d position(100,20,7), velocity(.1,.6,.2);
+    const double distance=position.norm();
+    const RelativisticSystem fixed({{mass,Eigen::Vector3d::Zero(),Eigen::Vector3d::Zero()}});
+    const Eigen::Vector3d schwarzschild=mass/(c*c*std::pow(distance,3))*
+        ((4*mass/distance-velocity.squaredNorm())*position+4*position.dot(velocity)*velocity);
+    relativeNear(fixed.correction(position,velocity),schwarzschild,1e-14);
+    require(fixed.correction(Eigen::Vector3d::Zero(),Eigen::Vector3d::Zero(),0).isZero(),"Single origin PN must vanish");
+    // Finite-mass two-body relative 1PN law in Newtonian COM coordinates.
+    constexpr double m1=80,m2=20,eta=m1*m2/(mass*mass);
+    const Eigen::Vector3d r1=-m2/mass*position,r2=m1/mass*position;
+    const Eigen::Vector3d v1=-m2/mass*velocity,v2=m1/mass*velocity;
+    const RelativisticSystem binary({{m1,r1,v1},{m2,r2,v2}});
+    const Eigen::Vector3d n=position/distance;
+    const double radialVelocity=n.dot(velocity);
+    const Eigen::Vector3d expected=mass/(c*c*distance*distance)*
+        (((4+2*eta)*mass/distance-(1+3*eta)*velocity.squaredNorm()+1.5*eta*radialVelocity*radialVelocity)*n
+         +(4-2*eta)*radialVelocity*velocity);
+    relativeNear(binary.correction(r2,v2,1)-binary.correction(r1,v1,0),expected,1e-14);
+    const Eigen::Vector3d shift(500,-700,1000);
+    const RelativisticSystem translated({{m1,r1+shift,v1},{m2,r2+shift,v2}});
+    relativeNear(translated.correction(r2+shift,v2,1)-translated.correction(r1+shift,v1,0),expected,1e-13);
+    rejects([&]{ (void)fixed.correction(Eigen::Vector3d::Zero(),Eigen::Vector3d::Zero()); });
+    rejects([&]{ (void)RelativisticSystem({{-1,r1,v1}}); });
+}
+
 void forceLawsAndPartials() {
     const SolarRadiationPressure srp("EARTH", "J2000", 1.3, 20, 1000);
     const Eigen::Vector3d sun(SolarRadiationPressure::kAu_km, 0, 0), zero = Eigen::Vector3d::Zero();
@@ -85,6 +149,38 @@ void forceLawsAndPartials() {
     rejects([&] { (void)pointMassGravity(-1); });
     rejects([&] { (void)thirdBodyGravity(4902, position, zero); });
     rejects([&] { (void)sumAccelerations({AccelerationFunction{}}); });
+}
+
+void thermalAndPlateLaws() {
+    const Eigen::Vector3d body(1e-12,2e-12,-5e-12);
+    const Eigen::Matrix3d rotation = Eigen::AngleAxisd(.7,Eigen::Vector3d::UnitY()).toRotationMatrix();
+    const ThermalRecoil thermal(body,100,2000,1000);
+    relativeNear(thermal.evaluate(100,2000,rotation).acceleration, rotation*body,1e-14);
+    relativeNear(thermal.evaluate(1100,2000,rotation).acceleration, .5*rotation*body,1e-14);
+    relativeNear(thermal.evaluate(100,1000,rotation).acceleration, 2*rotation*body,1e-14);
+    relativeNear(thermal.evaluate(1100,1000,rotation).acceleration,rotation*body,1e-14);
+    require(thermal.evaluate(100,2000,rotation).positionJacobian.isZero() &&
+            thermal.evaluate(100,2000,rotation).velocityJacobian.isZero(),"Thermal state partials");
+    rejects([&]{(void)thermal.evaluate(100,0,rotation);});
+    rejects([&]{(void)thermal.evaluate(100,2000,2*rotation);});
+    Eigen::Matrix3d reflected = Eigen::Matrix3d::Identity(); reflected(0,0)=-1;
+    rejects([&]{(void)thermal.evaluate(100,2000,reflected);});
+    rejects([&]{(void)ThermalRecoil(body,0,2000,0);});
+    const Eigen::Vector3d sun(SolarRadiationPressure::kAu_km,0,0), zero=Eigen::Vector3d::Zero();
+    const SolarRadiationPressure cannon("SATURN","J2000",1.42,12,2700);
+    relativeNear(flatPlateSRP(zero,sun,Eigen::Vector3d::UnitX(),12,2700,.21).acceleration,
+                 cannon.evaluateAtSunPosition(zero,sun).acceleration,1e-14);
+    require(flatPlateSRP(zero,sun,-Eigen::Vector3d::UnitX(),12,2700,.21).acceleration.isZero(),
+            "Backside of a one-sided plate must not receive frontside radiation");
+    require(flatPlateSRP(zero,sun,Eigen::Vector3d::UnitY(),12,2700,.21).acceleration.isZero(),
+            "Edge-on plate force must vanish");
+    const Eigen::Vector3d normal = Eigen::Vector3d(1,.5,.3).normalized();
+    checkPartials([&](double,const Eigen::Vector3d& r,const Eigen::Vector3d&){
+        return flatPlateSRP(r,sun,normal,12,2700,.21);
+    },{20000,4000,3000},100);
+    require(flatPlateSRPWithShadow({-7000,0,0},sun,Eigen::Vector3d::UnitX(),12,2700,.21,
+                                  6378,695700).acceleration.isZero(),"Umbra must remove SRP");
+    rejects([&]{(void)flatPlateSRP(zero,sun,normal,12,2700,.4);});
 }
 
 void j2LawAndPropagation() {
@@ -274,6 +370,8 @@ void eclipseGeometryAndPropagation() {
 int main() {
     try {
         forceLawsAndPartials();
+        gravityCompletion();
+        thermalAndPlateLaws();
         j2LawAndPropagation();
         propagatedPartialsAndNoise();
         eclipseGeometryAndPropagation();
