@@ -48,6 +48,10 @@ function(add_radiometric_targets)
     target_link_libraries(test_vlbi_link PRIVATE deepnav_radiometric)
     add_test(NAME test_vlbi_link COMMAND test_vlbi_link)
 
+    add_executable(test_reception_trajectory tests/test_reception_trajectory.cpp src/dynamics/LinearStateProvider.cpp)
+    target_link_libraries(test_reception_trajectory PRIVATE deepnav_ekf)
+    add_test(NAME test_reception_trajectory COMMAND test_reception_trajectory)
+
     if(DEEPNAV_RADIOMETRIC_WITH_CSPICE)
         find_path(CSPICE_INCLUDE_DIR NAMES SpiceUsr.h
             HINTS "$ENV{CSPICE_HOME}/include" "$ENV{CSPICE_HOME}/cspice/include")
@@ -79,6 +83,13 @@ function(add_radiometric_targets)
         target_link_libraries(cassini_two_way_wls PRIVATE deepnav_radiometric_spice deepnav_wls_spice)
         target_compile_definitions(cassini_two_way_wls PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
         target_compile_options(cassini_two_way_wls PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        add_executable(cassini_one_way_ekf benchmarks/cassini_one_way_ekf/main.cpp)
+        target_link_libraries(cassini_one_way_ekf PRIVATE deepnav_radiometric_spice deepnav_ekf)
+        target_compile_definitions(cassini_one_way_ekf PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_options(cassini_one_way_ekf PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        add_test(NAME test_cassini_one_way_ekf_smoke COMMAND cassini_one_way_ekf
+            --days 1 --no-noise --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-one-way-ekf-smoke)
+        set_tests_properties(test_cassini_one_way_ekf_smoke PROPERTIES TIMEOUT 180)
         if(UNIX)
             add_executable(cassini_monte_carlo benchmarks/cassini_two_way_wls/monte_carlo.cpp
                 benchmarks/cassini_two_way_wls/CassiniMonteCarlo.cpp)

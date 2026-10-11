@@ -1,5 +1,6 @@
 #include "../cassini_trajectory/CassiniForceModel.hpp"
 #include "CsvTable.hpp"
+#include "../cassini_trajectory/SavedSimulation.hpp"
 #include "RKF45Integrator.hpp"
 #include "DP853Integrator.hpp"
 #include "dynamics/EphemerisInterpolator.hpp"
@@ -118,29 +119,6 @@ public:
     std::string_view referenceFrame() const noexcept override {return "J2000";}
     std::string_view referenceOrigin() const noexcept override {return "SSB";}
 };
-class SavedSimulation final:public fd::dynamics::StateProvider {
-    od::EphemerisInterpolator history_;const fd::dynamics::StateProvider& origin_;
-public:
-    SavedSimulation(const std::filesystem::path& path,const fd::simulation::CassiniForceModel& force,const fd::dynamics::StateProvider& origin):origin_(origin) {
-        std::ifstream input(path);if (!input) throw std::runtime_error("Cannot read retained simulation CSV");
-        std::string line;std::getline(input,line);
-        if (line.find("epoch_tdb,utc,model,x_km,y_km,z_km,vx_km_s,vy_km_s,vz_km_s")==std::string::npos) throw std::runtime_error("Unexpected retained trajectory CSV schema");
-        while (std::getline(input,line)) {
-            std::stringstream row(line);std::vector<std::string> fields;std::string field;while (std::getline(row,field,',')) fields.push_back(field);
-            if (fields.size()<10) throw std::runtime_error("Malformed retained trajectory row");
-            if (fields[3]!="multibody_j2_srp_thermal") continue;
-            const double t=std::stod(fields[1]);State x,dx;for (int j=0;j<6;++j) x[j]=std::stod(fields[4+j]);
-            dx<<x.tail<3>(),force.evaluate(t,x.head<3>(),x.tail<3>()).acceleration;history_.addNode(t,x,dx);
-        }
-        if (history_.history().size()<2) throw std::runtime_error("Missing saved dynamical trajectory");
-    }
-    State relative(double t) const {return history_.interpolate(t);}
-    fd::dynamics::CartesianState stateAt(fd::opnav::TdbEpoch t) const override {
-        const auto x=relative(t.secondsPastJ2000);const auto origin=origin_.stateAt(t);return {x.head<3>()+origin.positionKm,x.tail<3>()+origin.velocityKmPerSec};
-    }
-    std::string_view referenceFrame() const noexcept override {return "J2000";}
-    std::string_view referenceOrigin() const noexcept override {return "SSB";}
-};
 struct VlbiObservation {double elapsed,elevationOne,elevationTwo,truth,noise,value;std::size_t pair;};
 struct Observation {double elapsed,elevation;std::size_t station;Eigen::Vector2d truth,noise,value;int pass=-1;bool rangeActive=true;double rangeBias=0,rangeIndependentNoise=0;};
 Eigen::Vector2d value(const radio::TwoWayLink& link,double t,double count,const fd::dynamics::StateProvider& station,const fd::dynamics::StateProvider& probe,const radio::FrequencyRamp& ramp,double referenceHz,const radio::SpiceTdbClock& clock) {
@@ -174,7 +152,7 @@ int main(int argc,char** argv) {
     const double t0=epoch(o.utc),duration=o.days*86400;double radii[3];SpiceInt n;bodvrd_c("SATURN","RADII",3,&n,radii);od::throwIfSpiceFailed("Saturn radius");
     const fd::simulation::CassiniForceModel force(gravity,attitude,fd::simulation::cassiniPerturbers(gravity),2,o.mass,o.area,o.cr,o.recoil,epoch("2005-08-13T00:00:00"),radii[0]);
     fd::dynamics::SpiceStateProvider saturn("SATURN"),sun("SUN");const radio::SpiceTdbClock clock;
-    const SavedSimulation truth(root/"results/cassini_two_way_wls/pass_schedule/truth/trajectory.csv",force,saturn);
+    const fd::simulation::SavedSimulation truth(root/"results/cassini_two_way_wls/pass_schedule/truth/trajectory.csv",force,saturn);
     if (o.exportCovariance) {
         // Reuse the completed estimate; no observations or WLS results are changed.
         Parameters estimate;Matrix covariance;std::string line,field;

@@ -1503,9 +1503,28 @@ Position RMS is 1,216.74 m without VLBI and 437.48 m with VLBI.
 See [the benchmark README](benchmarks/cassini_two_way_wls/README.md) for assumptions,
 reproduction commands, residual plots and position/velocity RMS plots with ±3σ shading.
 
-Only `results/cassini_two_way_wls/pass_schedule` is retained. Its `truth/` subfolder
+The retained two-way result is `results/cassini_two_way_wls/pass_schedule`. Its `truth/` subfolder
 holds the unchanged simulation inputs required for reruns; earlier result folders
 and Monte Carlo experiment outputs have been removed. The reusable Monte Carlo
 module remains available in [its documentation](docs/monte_carlo.md).
 The separate [SPK propagation benchmark](benchmarks/cassini_trajectory/README.md)
 can still generate a fresh dynamical comparison.
+
+## Cassini one-way onboard EKF
+
+The [one-way EKF benchmark](benchmarks/cassini_one_way_ekf/README.md) reuses the
+retained Cassini simulation, realistic pass windows, one-way clock-tagged radio
+models, existing orbit/clock propagator and EKF. It compares a known ideal clock
+with an estimated DSAC-inspired clock over the same two weeks. C++ generates
+uplink range/count-Doppler data and estimates orbit plus clock bias/frequency;
+Python validates and plots exported CSVs. See the generated
+[results report](results/cassini_one_way_ekf/REPORT.md).
+
+The previously retained two-way WLS results remain in
+`results/cassini_two_way_wls/pass_schedule`; new EKF results are stored separately
+in `results/cassini_one_way_ekf`.
+
+A [clock-frequency prior sweep](results/cassini_one_way_ekf/frequency_prior_sweep/REPORT.md)
+keeps observations and other assumptions fixed while comparing initial frequency
+uncertainties of 10⁻¹⁰, 10⁻¹¹ and 10⁻¹². It includes RMS, endpoint errors,
+clock recovery and covariance correlations; the baseline default remains unchanged.

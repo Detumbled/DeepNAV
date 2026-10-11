@@ -1,6 +1,6 @@
 # Cassini two-week realistic-pass WLS
 
-The sole retained experiment is `results/cassini_two_way_wls/pass_schedule`,
+The retained two-way experiment is `results/cassini_two_way_wls/pass_schedule`,
 covering 9–23 October 2004. See its [pass report](../../results/cassini_two_way_wls/pass_schedule/PASS_EXPERIMENT.md),
 [paired comparison](../../results/cassini_two_way_wls/pass_schedule/COMPARISON.md)
 and [VLBI residual/RMS report](../../results/cassini_two_way_wls/pass_schedule/with_vlbi/VLBI_UNCERTAINTY.md).
