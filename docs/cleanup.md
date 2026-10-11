@@ -16,3 +16,19 @@ alternate-mass/recoil outputs and study driver from the repository; numerical
 validation of the retained physical model remains. Recoverable archive:
 
 /tmp/deepnav-sensitivity-archive-8wnawsoh
+
+Replaced the superseded single-fit two-way WLS output with the paired
+`results/cassini_two_way_wls/no_vlbi` and `with_vlbi` fits plus comparison figures.
+The original simulated truth in `results/cassini_trajectory` remains unchanged.
+The old single-fit outputs are recoverable at:
+
+/tmp/deepnav-pre-vlbi-baseline-onx98r6m
+
+## Retained realistic-pass results
+
+Only `results/cassini_two_way_wls/pass_schedule` is retained, including both paired
+fits and their existing plots. The three unchanged simulation truth files were
+relocated into its `truth/` subfolder; consumers and input provenance paths now
+point there. Earlier trajectory, continuous-tracking, initial-guess and Monte Carlo
+result folders were removed. Original numerical fit results and run source hashes
+were preserved; no WLS refit was performed during this cleanup.

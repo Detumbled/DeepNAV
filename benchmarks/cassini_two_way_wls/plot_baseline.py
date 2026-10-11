@@ -7,10 +7,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-folder=Path(sys.argv[1]).resolve() if len(sys.argv)>1 else Path('results/cassini_two_way_wls').resolve()
+folder=Path(sys.argv[1]).resolve() if len(sys.argv)>1 else Path('results/cassini_two_way_wls/pass_schedule/no_vlbi').resolve()
 s=json.loads((folder/'summary.json').read_text());orbit=pd.read_csv(folder/'trajectory.csv');r=pd.read_csv(folder/'residuals.csv');observations=pd.read_csv(folder/'observations.csv');it=pd.read_csv(folder/'iterations.csv');schedule=pd.read_csv(folder/'schedule.csv');cov=np.loadtxt(folder/'initial_covariance.csv',delimiter=',')
 assert s['converged'] and len(r)==s['tracking_epochs']==len(observations)
-assert s['scalar_observations']==2*len(r)
+assert s['scalar_observations']==len(r)+int(r.postfit_range_m.notna().sum())+s.get('vlbi_observations',0)
 assert np.isfinite(orbit.to_numpy()).all() and np.isfinite(cov).all()
 np.linalg.cholesky(cov);np.testing.assert_allclose(cov,cov.T,rtol=1e-10,atol=1e-15)
 np.testing.assert_array_equal(r.elapsed_s,observations.elapsed_s)
@@ -50,7 +50,7 @@ fig,axes=plt.subplots(2,2,figsize=(13,8),layout='constrained');clean(axes)
 for j,(name,unit,sigma) in enumerate([('range','m',s['range_sigma_m']),('doppler','hz',s['doppler_sigma_hz'])]):
     for phase,color in [('prefit','#a8a8a8'),('postfit','#008f95')]:axes[j,0].plot(rdays,r[f'{phase}_{name}_{unit}']/sigma,'.',ms=2,label=phase,color=color,alpha=.65)
     axes[j,0].set_ylabel(f'{name.title()} residual / assumed σ');axes[j,0].legend();axes[j,0].set_xlabel('Elapsed TDB days')
-    axes[j,1].hist(r[f'postfit_{name}_{unit}']/sigma,bins=45,density=True,color='#008f95',alpha=.7)
+    axes[j,1].hist(r[f'postfit_{name}_{unit}'].dropna()/sigma,bins=45,density=True,color='#008f95',alpha=.7)
     x=np.linspace(-4,4,200);axes[j,1].plot(x,np.exp(-x*x/2)/np.sqrt(2*np.pi),'k--',label='N(0,1) reference');axes[j,1].set_xlabel('Postfit residual / assumed σ');axes[j,1].set_ylabel('Density');axes[j,1].legend()
 fig.suptitle('Synthetic two-way measurement residuals · observation minus prediction')
 save(fig,'residuals')
@@ -92,7 +92,7 @@ save(fig,'parameters')
 lines=['# Cassini simulated-truth two-way WLS baseline','',
     f"**{s['duration_days']:g} TDB days from {s['start_utc']}; {s['mass_kg']:g} kg; eight estimated parameters.**",'',
     '## Ground truth','',
-    'Observations are generated in C++ from the saved `multibody_j2_srp_thermal` rows of `results/cassini_trajectory/trajectory.csv`. Cubic Hermite interpolation uses saved positions and velocities, with acceleration from the retained model for velocity interpolation. Spacecraft SPK states are not used as observation truth or as the accuracy reference. Planetary, station and attitude kernels remain inputs to the dynamical and radio models.', '',
+    'Observations are generated in C++ from the saved `multibody_j2_srp_thermal` rows of `results/cassini_two_way_wls/pass_schedule/truth/trajectory.csv`. Cubic Hermite interpolation uses saved positions and velocities, with acceleration from the retained model for velocity interpolation. Spacecraft SPK states are not used as observation truth or as the accuracy reference. Planetary, station and attitude kernels remain inputs to the dynamical and radio models.', '',
     '| Result | Value |','|---|---:|',
     f"| Tracking epochs / scalar observations | {s['tracking_epochs']} / {s['scalar_observations']} |",
     f"| Iterations / converged | {s['iterations']} / {s['converged']} |",
@@ -104,7 +104,7 @@ lines=['# Cassini simulated-truth two-way WLS baseline','',
     '## Augmented estimator','',
     'The estimated vector is [X₀, Y₀, Z₀, VX₀, VY₀, VZ₀, C_s, λ]. The scales are constant over the arc: a_SRP = C_s a_SRP,nominal and a_thermal = λ a_thermal,nominal. Both truth scales are 1. C_s scales the entire nominal attitude-dependent SRP acceleration, rather than changing the reflection law through Cr. λ scales the retained signed XYZ recoil vector, preserving its attitude dependence and radioactive decay.', '',
     'Nominal forces are multibody tides, direct Saturn J2, uniform rings, attitude-dependent HGA SRP and thermal recoil. Gravity mask 2 retains the previously selected model. Mass, area, Cr and all remaining coefficients stay fixed.', '',
-    'Initial position/velocity offsets are [1, −0.8, 0.5] km and [0.01, −0.008, 0.006] m/s. Initial force scales are 1. Gaussian priors have 2 km position and 0.1 m/s velocity standard deviations, centered on the perturbed initial state. Force-scale priors are centered at 1, with assumed 20% SRP and 50% thermal uncertainties. These illustrative priors are part of the solution, not uncertainty estimates from a Cassini calibration.', '',
+    f"Initial position/velocity offsets are {s.get('initial_guess_scale',1):g} times [1, −0.8, 0.5] km and [0.01, −0.008, 0.006] m/s. Initial force scales are 1. Gaussian prior means retain the original 1× position/velocity offset regardless of the numerical starting guess. Prior standard deviations are 2 km and 0.1 m/s. Force-scale priors are centered at 1, with assumed 20% SRP and 50% thermal uncertainties. These illustrative priors are part of the solution, not uncertainty estimates from a Cassini calibration.", '',
     'C++ integrates the eight-state vector and 8×8 variational matrix. The two parameter sensitivity columns are driven by the nominal SRP and recoil accelerations. Full counted-link central differences use the propagated sensitivities; accepted corrections use fresh nonlinear propagation. The existing WLS and batch driver minimize weighted radio residuals plus the prior penalty. No Cartesian truth samples are fitted, and no process noise, state resets or maneuver impulses are estimated.', '',
     '| Parameter | Estimate | Truth | Posterior 1σ | Prior 1σ |','|---|---:|---:|---:|---:|']
 for j,name in enumerate(['X₀ (km)','Y₀ (km)','Z₀ (km)','VX₀ (km/s)','VY₀ (km/s)','VZ₀ (km/s)','C_s','λ']):
@@ -128,5 +128,12 @@ lines+=['', 'Uncertainties are conditional on the remaining fixed model and assu
     '![Force scales and correlations](parameters.png)', '',
     '![Radio residual distributions](residuals.png)', '',
     '![WLS convergence](convergence.png)', '']
+if s.get('vlbi_observations',0):
+    lines+=['', '## Added VLBI', '', f"{s['vlbi_observations']} scalar common-wavefront measurements across the arc. DSS-14/43, DSS-14/63, DSS-43/63 counts: {s['vlbi_pair_counts']}. Both stations exceed 10° at their reception events. The observable is c times the signed station-two minus station-one TDB reception delay, with solar Shapiro and troposphere on both legs. The synthetic noise is {s['vlbi_sigma_m']:g} m differential path (about 33 ps), using independent seed {s['vlbi_noise_seed']}. Known station clocks and matching propagation corrections are assumed; this is not a quasar-calibrated flight delta-DOR measurement.", '', f"Postfit VLBI RMS: {s['postfit_vlbi_rms_m']:.6g} m; half-step change {s['refined_vlbi_maximum_m']:.6g} m; half-stencil error over posterior uncertainty {s['vlbi_stencil_posterior_noise_fraction']:.6g} times the noise."]
+if s.get('pass_schedule',False):
+    lines=[line.replace('assumed independent noise', 'assumed correlated range and independent Doppler/VLBI noise') for line in lines]
+    lines=[line.replace('Independent Gaussian noise:', 'Marginal noise scales (range correlated within each pass):') for line in lines]
+    lines=[f"DSS-14/43/63 sample counts: {s['station_counts']}. One contiguous pass per day with rotating station preference, subject to visibility and non-overlap; both legs and count endpoints exceed 10°." if line.startswith('DSS-14/43/63 counts:') else line for line in lines]
+    lines+=['', '## Pass schedule and correlated range errors', '', f"{s['pass_count']} contiguous daily passes target {s['pass_target_hours']:g} usable hours each. Actual counts: {s['doppler_observations']} Doppler observations at {s['cadence_s']:g} s cadence/count and {s['range_observations']} range observations at {s['range_cadence_s']:g} s cadence. A rotating station preference is subject to both-leg visibility above 10°. Range fields are blank at Doppler-only epochs; those samples never enter the estimator.", '', f"Range generation adds a shared zero-mean Gaussian offset with σ={s['range_pass_bias_sigma_m']:g} m independently for each pass, plus independent measurement noise σ={s['range_independent_sigma_m']:g} m. The covariance block is σ_ind² I + σ_bias² 11ᵀ. C++ applies its symmetric inverse square root to both residuals and Jacobians; the shared offsets are marginalized, retaining eight estimated parameters. Injected offsets in passes.csv are for diagnosis only and are not supplied to the estimator. These noise levels are illustrative assumptions.", '', 'Doppler retains independent 0.01 Hz synthetic noise. A pass schedule and correlated range errors do not reproduce the complete flight error budget: time-dependent plasma, troposphere, antenna phase center and clock errors remain outside this experiment.','', '[Tracking passes](passes.csv) · [Pass range analysis](pass_range_analysis.csv)']
 (folder/'BASELINE.md').write_text('\n'.join(lines))
 print(json.dumps({key:s[key] for key in ['converged','iterations','tracking_epochs','fitted_position_rms_m','postfit_range_rms_m','postfit_doppler_rms_hz','nominal_refined_maximum_m']},indent=2))

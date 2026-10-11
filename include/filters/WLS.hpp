@@ -33,6 +33,8 @@ public:
                               const Eigen::VectorXd& measurementVariances);
 
     void setApriori(const Eigen::MatrixXd& covariance);
+    // Change the prior mean without changing the current linearization state.
+    void setAprioriMean(const Eigen::VectorXd& mean);
     void resetAccumulator();
 
     template <typename Derived>

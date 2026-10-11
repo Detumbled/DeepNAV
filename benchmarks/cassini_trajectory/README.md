@@ -1,5 +1,10 @@
 # Cassini SPK versus open-loop dynamics
 
+Earlier generated SPK-comparison results have been cleaned up. The unchanged
+simulation truth used by the latest WLS example is retained in
+`results/cassini_two_way_wls/pass_schedule/truth/`. Commands below generate a
+fresh SPK comparison; they do not replace that retained truth automatically.
+
 The default arc is **9–23 October 2004**, ending before OTM-4. Both initial
 position and velocity come directly from reconstructed SPK, with geometric
 `NONE` states in Saturn-centered J2000. No initial-state fitting or later state resets occur.

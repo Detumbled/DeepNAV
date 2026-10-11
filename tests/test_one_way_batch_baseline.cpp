@@ -47,5 +47,16 @@ int main() {
           (actual.transitions[1] - 2 * Eigen::MatrixXd::Identity(9, 9)).norm() <
               1e-6,
       "Full-arc state/covariance sensitivities are inconsistent");
+  // A numerical starting point must not silently become the prior mean.
+  for (double start : {-100., 10.}) {
+    fd::filters::WLS filter;
+    filter.setInitialState(Eigen::VectorXd::Constant(1,start),Eigen::MatrixXd::Constant(1,1,4.),0);
+    filter.setAprioriMean(Eigen::VectorXd::Zero(1));
+    filter.processBatchDiagonal(Eigen::VectorXd::Constant(1,2.-start),Eigen::MatrixXd::Identity(1,1),Eigen::VectorXd::Ones(1));
+    require(std::abs(filter.state()[0]-1.6)<1e-12,"Changing the starting guess changed the MAP estimate");
+    require(std::abs(filter.covariance()(0,0)-.8)<1e-12,"Independent prior mean changed the covariance");
+    filter.processBatchDiagonal(Eigen::VectorXd::Constant(1,2.-filter.state()[0]),Eigen::MatrixXd::Identity(1,1),Eigen::VectorXd::Ones(1));
+    require(std::abs(filter.lastStateCorrection()[0])<1e-12,"Prior mean was lost on relinearization");
+  }
   std::filesystem::remove_all(output);
 }

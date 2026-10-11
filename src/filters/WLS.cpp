@@ -128,6 +128,14 @@ void WLS::setApriori(const Eigen::MatrixXd& covariance) {
     resetAccumulator();
 }
 
+void WLS::setAprioriMean(const Eigen::VectorXd& mean) {
+    if (!initialized_) throw std::logic_error("Initialize WLS before setting the prior mean.");
+    if (mean.size() != x_hat_.size() || !mean.allFinite())
+        throw std::invalid_argument("WLS prior mean must match the state dimension and be finite.");
+    prior_state_ = mean;
+    resetAccumulator();
+}
+
 void WLS::resetAccumulator() {
     if (!initialized_) {
         throw std::logic_error("WLS filter must be initialized before resetting the accumulator.");

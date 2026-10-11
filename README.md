@@ -1489,16 +1489,23 @@ conditioning diagnostics before interpreting state accuracy from residual
 reduction alone.
 
 
-## Cassini two-week SPK propagation comparison
+## Cassini two-week realistic-pass WLS example
 
-Compare the official Cassini SPK with open-loop DeepNAV dynamics, including
-multibody gravity, Saturn J2, attitude-dependent HGA SRP and thermal recoil.
-The propagation starts from the exact SPK state, checks integration convergence,
-and records reconstructed/as-flown attitude coverage.
-See [the benchmark instructions](benchmarks/cassini_trajectory/README.md).
+The retained result is [the realistic-pass comparison](results/cassini_two_way_wls/pass_schedule/PASS_EXPERIMENT.md)
+for 9–23 October 2004. It compares two-way range/Doppler WLS estimates with and
+without 60 VLBI measurements against the saved simulated trajectory. Fourteen
+visibility-qualified DSN passes provide 4,889 counted Doppler observations and
+242 range observations with shared pass errors.
 
-The [two-week coherent two-way WLS baseline](benchmarks/cassini_two_way_wls/README.md)
-uses the retained simulation as truth for synthetic two-way range and counted
-Doppler. C++ estimates six initial-state components plus SRP and thermal-recoil
-scales, with DSN visibility and explicit noise/prior assumptions. It exports
-estimates and conditional covariance to CSV; Python analyzes and plots them.
+C++ generates observations and estimates six initial-state components plus SRP
+and thermal-recoil scales. Python analyzes and plots the exported CSV files.
+Position RMS is 1,216.74 m without VLBI and 437.48 m with VLBI.
+See [the benchmark README](benchmarks/cassini_two_way_wls/README.md) for assumptions,
+reproduction commands, residual plots and position/velocity RMS plots with ±3σ shading.
+
+Only `results/cassini_two_way_wls/pass_schedule` is retained. Its `truth/` subfolder
+holds the unchanged simulation inputs required for reruns; earlier result folders
+and Monte Carlo experiment outputs have been removed. The reusable Monte Carlo
+module remains available in [its documentation](docs/monte_carlo.md).
+The separate [SPK propagation benchmark](benchmarks/cassini_trajectory/README.md)
+can still generate a fresh dynamical comparison.

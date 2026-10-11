@@ -11,6 +11,14 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Experiment-independent orchestration: no Eigen, SPICE or estimator dependency.
+add_library(deepnav_monte_carlo STATIC src/simulation/monte_carlo/MonteCarlo.cpp)
+target_include_directories(deepnav_monte_carlo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(deepnav_monte_carlo PUBLIC cxx_std_23)
+add_executable(test_monte_carlo tests/test_monte_carlo.cpp)
+target_link_libraries(test_monte_carlo PRIVATE deepnav_monte_carlo)
+add_test(NAME test_monte_carlo COMMAND test_monte_carlo)
+
 if(APPLE)
     add_compile_options("-gdwarf-4")
 endif()
@@ -22,6 +30,8 @@ function(add_radiometric_targets)
         src/observations/radiometric/TwoWayLink.cpp
         src/observations/radiometric/PropagationCorrections.cpp
         src/observations/radiometric/TwoWayMeasurement.cpp
+        src/observations/radiometric/VlbiLink.cpp
+        src/observations/radiometric/VlbiMeasurement.cpp
         src/observations/radiometric/EndpointClock.cpp
         src/observations/radiometric/OneWayLink.cpp
         src/observations/radiometric/OneWayMeasurement.cpp
@@ -29,6 +39,14 @@ function(add_radiometric_targets)
     target_include_directories(deepnav_radiometric PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(deepnav_radiometric PUBLIC Eigen3::Eigen)
     target_compile_features(deepnav_radiometric PUBLIC cxx_std_23)
+
+    add_executable(test_pass_range_whitening tests/test_pass_range_whitening.cpp)
+    target_link_libraries(test_pass_range_whitening PRIVATE deepnav_radiometric)
+    add_test(NAME test_pass_range_whitening COMMAND test_pass_range_whitening)
+
+    add_executable(test_vlbi_link tests/test_vlbi_link.cpp src/dynamics/LinearStateProvider.cpp)
+    target_link_libraries(test_vlbi_link PRIVATE deepnav_radiometric)
+    add_test(NAME test_vlbi_link COMMAND test_vlbi_link)
 
     if(DEEPNAV_RADIOMETRIC_WITH_CSPICE)
         find_path(CSPICE_INCLUDE_DIR NAMES SpiceUsr.h
@@ -61,10 +79,26 @@ function(add_radiometric_targets)
         target_link_libraries(cassini_two_way_wls PRIVATE deepnav_radiometric_spice deepnav_wls_spice)
         target_compile_definitions(cassini_two_way_wls PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
         target_compile_options(cassini_two_way_wls PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        if(UNIX)
+            add_executable(cassini_monte_carlo benchmarks/cassini_two_way_wls/monte_carlo.cpp
+                benchmarks/cassini_two_way_wls/CassiniMonteCarlo.cpp)
+            target_link_libraries(cassini_monte_carlo PRIVATE deepnav_monte_carlo Eigen3::Eigen)
+            target_compile_definitions(cassini_monte_carlo PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+            add_dependencies(cassini_monte_carlo cassini_two_way_wls)
+        endif()
         add_test(NAME test_cassini_two_way_wls_smoke COMMAND cassini_two_way_wls
             --days 0.25 --truth simulation --no-noise
             --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-two-way-wls-smoke)
         set_tests_properties(test_cassini_two_way_wls_smoke PROPERTIES TIMEOUT 180)
+        add_test(NAME test_cassini_vlbi_wls_smoke COMMAND cassini_two_way_wls
+            --days 1 --vlbi-count 4 --truth simulation --no-noise
+            --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-vlbi-wls-smoke)
+        set_tests_properties(test_cassini_vlbi_wls_smoke PROPERTIES TIMEOUT 180)
+        add_test(NAME test_cassini_pass_schedule_smoke COMMAND cassini_two_way_wls
+            --days 2 --pass-schedule --range-sigma-m 1 --range-bias-sigma-m 10
+            --initial-guess-scale 10 --vlbi-count 4 --no-noise
+            --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-pass-wls-smoke)
+        set_tests_properties(test_cassini_pass_schedule_smoke PROPERTIES TIMEOUT 180)
         add_executable(compare_gmat_two_way benchmarks/gmat/compare_gmat_two_way.cpp)
         target_link_libraries(compare_gmat_two_way PRIVATE deepnav_radiometric_spice)
     endif()

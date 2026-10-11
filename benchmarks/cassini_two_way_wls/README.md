@@ -1,92 +1,110 @@
-# Cassini two-week simulated-truth two-way WLS
+# Cassini two-week realistic-pass WLS
 
-C++ generates coherent two-way observations from the retained Cassini simulation,
-then estimates eight parameters: six initial Cartesian components, an SRP scale
-`C_s`, and a thermal-recoil scale `lambda`. Python only reads C++ CSV outputs for
-validation, analysis and plotting.
+The sole retained experiment is `results/cassini_two_way_wls/pass_schedule`,
+covering 9–23 October 2004. See its [pass report](../../results/cassini_two_way_wls/pass_schedule/PASS_EXPERIMENT.md),
+[paired comparison](../../results/cassini_two_way_wls/pass_schedule/COMPARISON.md)
+and [VLBI residual/RMS report](../../results/cassini_two_way_wls/pass_schedule/with_vlbi/VLBI_UNCERTAINTY.md).
+Earlier result folders and Monte Carlo experiment outputs were removed.
+
+C++ generates observations, propagates dynamics and performs WLS. Python only
+validates, analyzes and plots the C++ exports. Truth is the saved
+`multibody_j2_srp_thermal` trajectory in `pass_schedule/truth/trajectory.csv`,
+interpolated in C++ with cubic Hermite position/velocity histories. The accompanying
+`metadata.json` and `summary.json` preserve its force settings and provenance.
+These three files were relocated without changing their contents. Spacecraft SPK
+is not the observation truth or error reference; planetary, station and attitude
+kernels remain model inputs.
+
+## Model and estimation
+
+The retained model uses multibody gravity, direct Saturn J2, uniform ring gravity,
+attitude-dependent HGA SRP and thermal recoil. Mass is 3,220 kg, nominal area
+12 m² and Cr 1.42. Indirect J2 and relativistic terms remain disabled.
+
+Eight fitted parameters are the six initial Saturn-relative Cartesian components,
+SRP scale `C_s` and thermal scale `lambda`. Both scale truth values and initial
+values are 1. Gaussian scale priors have standard deviations 0.2 and 0.5.
+Numerical starting offsets are [10, −8, 5] km and [0.10, −0.08, 0.06] m/s.
+Prior means retain the original offsets [1, −0.8, 0.5] km and
+[0.01, −0.008, 0.006] m/s, with standard deviations 2 km and 0.1 m/s.
+Mass, area and other force coefficients remain fixed.
+
+The nonlinear batch integrates the augmented state and variational equations,
+repropagates accepted corrections, and recomputes undamped covariance. Convergence
+requires a joint undamped correction below 0.1 posterior standard deviations,
+with at least two iterations. Both retained fits converged in two iterations.
+Runtime checks include force/STM derivatives, radio half-stencil consistency and
+half-step integration. No Cartesian truth samples are fitted as observations.
+
+## Tracking assumptions
+
+Fourteen non-overlapping passes use DSS-14/43/63 (5/5/4 passes), targeting up to
+six hours each. Every pass midpoint lies in a different elapsed TDB day. Both
+light-time legs and both Doppler count endpoints satisfy a 10° elevation mask.
+
+- 4,889 Doppler observations: contiguous 60 s counts at 60 s cadence, 0.01 Hz independent noise.
+- 242 range observations: 20-minute cadence, 1 m independent noise plus a shared 10 m Gaussian offset per pass.
+- 60 VLBI measurements in the paired fit: jointly visible station pairs, 0.01 m independent path noise (approximately 33 ps).
+
+`PassRangeWhitening` applies the exact covariance block
+`R = sigma_ind² I + sigma_shared² 11ᵀ` to range residuals and design rows.
+It marginalizes the pass bias without supplying its injected value to WLS or
+adding fitted states. Independent VLBI noise leaves the paired radio data identical.
+The common-emission VLBI observable is `c × (TDB reception two − reception one)`.
+Both links include solar Shapiro and troposphere; station clocks are assumed known.
+The two-way model uses an X/X turnaround ratio of 880/749, 7.175 GHz uplink and
+known 1 µs transponder delay.
+
+This is a synthetic schedule and noise budget. It does not reconstruct actual
+DSN allocations, plasma fluctuations, clock errors or quasar-calibrated delta-DOR.
+Force coefficients were previously calibrated against SPK, so the simulation
+comparison is not independent physical validation. Formal covariance is conditional
+on the assumed observation errors, priors and fixed forces.
+
+| Result | Without VLBI | With 60 VLBI |
+|---|---:|---:|
+| Position RMS (m) | 1,216.74 | 437.48 |
+| Endpoint position error (m) | 1,368.21 | 145.18 |
+| Formal position RMS (m) | 1,925.16 | 445.33 |
+
+## Reproduce the retained example
+
+Run from the repository root with the required kernels and saved truth inputs present.
+Full estimation commands regenerate the paired fits:
 
 ```sh
 cmake --build build-clang --target cassini_two_way_wls -j 4
-build-clang/cassini_two_way_wls --truth simulation --output results/cassini_two_way_wls
-MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python benchmarks/cassini_two_way_wls/analyze_baseline.py
+build-clang/cassini_two_way_wls --pass-schedule --range-sigma-m 1 --range-bias-sigma-m 10 --initial-guess-scale 10 --vlbi-count 0 --output results/cassini_two_way_wls/pass_schedule/no_vlbi
+build-clang/cassini_two_way_wls --pass-schedule --range-sigma-m 1 --range-bias-sigma-m 10 --initial-guess-scale 10 --vlbi-count 60 --output results/cassini_two_way_wls/pass_schedule/with_vlbi
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python benchmarks/cassini_two_way_wls/analyze_baseline.py --output results/cassini_two_way_wls/pass_schedule/no_vlbi
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python benchmarks/cassini_two_way_wls/analyze_baseline.py --output results/cassini_two_way_wls/pass_schedule/with_vlbi
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python benchmarks/cassini_two_way_wls/plot_vlbi_comparison.py
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python benchmarks/cassini_two_way_wls/plot_pass_schedule.py
 ```
 
-Truth comes only from the `multibody_j2_srp_thermal` rows of
-`results/cassini_trajectory/trajectory.csv`, interpolated in C++ with cubic Hermite
-position/velocity histories. The saved initial state initializes the estimator.
-Spacecraft SPK is not used as observation truth or as the error reference.
-Planetary, station and attitude kernels remain model inputs. The original retained
-simulation is unchanged.
-
-Defaults are the 14-day 9–23 October 2004 arc, 3,220 kg, 12 m², Cr 1.42, and the
-retained calibrated XYZ recoil vector. The shared force model includes multibody
-tides, direct Saturn J2, uniform rings, attitude HGA SRP and thermal recoil.
-Indirect J2 and relativity remain disabled, as in the retained simulation.
-
-The two new coefficients are dimensionless constant scales:
-
-- `a_SRP = C_s * a_SRP_nominal`, including nominal attitude and shadow geometry.
-- `a_thermal = lambda * a_thermal_nominal`, preserving recoil direction,
-  attitude dependence and radioactive decay.
-
-Both truth coefficients and initial guesses are 1. Gaussian scale priors are
-centered at 1 with assumed standard deviations 0.2 and 0.5 respectively. These
-are illustrative regularization assumptions, not Cassini calibration errors.
-Cartesian initial offsets are [1, −0.8, 0.5] km and [0.01, −0.008, 0.006] m/s;
-Cartesian priors are centered on that guess with 2 km and 0.1 m/s uncertainties.
-Remaining force coefficients, mass and area are fixed.
-
-The existing C++ `WLS` and `BatchLeastSquaresDriver` solve the nonlinear batch.
-RKF45 integrates eight states and the 8×8 variational matrix. The SRP/recoil
-sensitivity columns are driven by their nominal accelerations. The complete
-radio model is differentiated using affine sensitivity trajectories; accepted
-corrections are evaluated with a fresh nonlinear orbit. Large affine coefficient
-stencils resolve their weak radio signatures above numerical Doppler precision;
-they do not propagate actual orbits with those large coefficients. Covariance
-is recomputed without damping. No Cartesian truth samples are fitted by WLS.
-
-Observation assumptions:
-
-- DSS-14/43/63; one station per epoch, choosing the highest minimum elevation
-  over both legs and both count endpoints; cutoff 10°.
-- 600 s cadence; end-tagged 60 s counted Doppler; reception begins 6000 s after
-  the initial spacecraft epoch so retarded spacecraft events stay inside the arc.
-- Independent Gaussian noise: 10 m range and 0.01 Hz Doppler; seed 2026.
-- Coherent X/X ratio 880/749, 7.175 GHz constant uplink, known 1 µs delay.
-- Matching solar Shapiro, 2.3 m zenith troposphere and smooth TDB−TT ground clock.
-
-This is a synthetic visibility schedule, not flight tracking data. The original
-force coefficients were previously calibrated against SPK; that prior history
-does not make the generated two-way observations independent physical validation.
-A good radio fit does not guarantee accurate recovery of all eight parameters.
-Posterior uncertainties and correlations show how much the data constrain the
-force scales beyond their priors.
-
-Runtime verification checks force derivatives, the augmented STM against a
-one-day nonlinear DP853 propagation, radio half-stencil consistency and a final
-half-step integration. The half-stencil discrepancy over posterior parameter
-uncertainty must stay below 1% of observation noise. Final convergence requires an undamped correction below
-0.1 posterior standard deviations. For a trial below that threshold, the line
-search permits a 0.1% objective-resolution allowance for counted Doppler;
-larger steps must decrease the objective. Python verifies CSV dimensions,
-RMS values, covariance positivity, coefficient exports and the saved truth source.
-
-Outputs in `results/cassini_two_way_wls`:
-
-- `observations.csv`: simulation truth, noise and generated two-way data.
-- `initial_estimate.csv`: all eight estimates, truth, seed and formal uncertainty.
-- `trajectory.csv`: estimated position/velocity, saved truth positions, RTN
-  errors and propagated formal position uncertainty.
-- `residuals.csv`, `iterations.csv`, `initial_covariance.csv` (8×8), `summary.json`.
-- `BASELINE.md`: numerical results, assumptions and validation.
-- Overview, residual, convergence, parameter/correlation and 3D PNG/PDF plots;
-  standalone `trajectory_3d.html` when Plotly is available.
-
-Short diagnostic:
+Export covariance from the saved VLBI solution and plot residuals and cumulative
+position/velocity RMS:
 
 ```sh
-build-clang/cassini_two_way_wls --days 0.25 --no-noise --output /tmp/cassini-wls-smoke
+build-clang/cassini_two_way_wls --export-covariance --pass-schedule --output results/cassini_two_way_wls/pass_schedule/with_vlbi
+MPLCONFIGDIR=/tmp/deepnav-matplotlib .venv-cassini/bin/python benchmarks/cassini_two_way_wls/plot_vlbi_uncertainty.py
 ```
 
-The short diagnostic checks numerical execution; its weak geometry and finite
-prior prevent treating it as an exact parameter-recovery test.
+Covariance export repropagates the saved eight-parameter estimate without refitting.
+RMS panels have symmetric −3σ to +3σ shading and no separate formal uncertainty
+curve. The shading is a covariance reference envelope, not a confidence interval
+on the nonnegative RMS. Range, equivalent counted range-rate and VLBI residuals
+have no shading.
+
+Each fit retains observation, residual, trajectory, initial estimate/covariance,
+iteration and pass CSV exports, `summary.json`, `BASELINE.md`, and PNG/PDF/interactive
+3D plots. The VLBI fit additionally retains propagated covariance and RMS analysis.
+The shared `truth/` files must be preserved when cleaning generated outputs.
+
+The reusable Monte Carlo core and Cassini adapter remain available; see
+[the module documentation](../../docs/monte_carlo.md). No Monte Carlo results are retained.
+
+For historical sampling context, the
+[JPL Cassini navigation assessment, §1.3.1](https://descanso.jpl.nasa.gov/DPSummary/DESCANSO17_Cassini_RevA.pdf)
+describes Doppler compression and pass-level range weighting. Our cadence and
+shared-error covariance are synthetic assumptions.

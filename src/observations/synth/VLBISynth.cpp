@@ -2,6 +2,10 @@
 
 #include "stations/StationCatalog.hpp"
 #include "perturbations/Shapiro.hpp"
+#include "observations/radiometric/VlbiLink.hpp"
+#include "observations/radiometric/PropagationCorrections.hpp"
+#include "utils/CSPICE/SpiceError.hpp"
+#include <SpiceUsr.h>
 
 #include <cmath>
 #include <stdexcept>
@@ -44,6 +48,20 @@ void validateVLBIConfig(const VLBIConfig& vlbi) {
     const int station_naif_id = od::stationNaifIdFromName(stationName);
     return od::buildStationFromKernel(stationName, station_naif_id, epochTdb);
 }
+
+// Adapt the legacy Sun-relative provider to the shared inertial SSB link.
+class Endpoint final:public fd::dynamics::StateProvider {
+    std::string target_,frame_;const TargetStateProvider* injected_;
+public:
+    Endpoint(std::string target,std::string frame,const TargetStateProvider* injected=nullptr):target_(std::move(target)),frame_(std::move(frame)),injected_(injected) {}
+    fd::dynamics::CartesianState stateAt(fd::opnav::TdbEpoch epoch) const override {
+        double state[6],lt;spkezr_c((injected_?"SUN":target_.c_str()),epoch.secondsPastJ2000,frame_.c_str(),"NONE","SSB",state,&lt);od::throwIfSpiceFailed("VLBI endpoint state");
+        TargetState6 x;for (int j=0;j<6;++j) x[j]=state[j];if (injected_) x+=injected_->stateAt(epoch.secondsPastJ2000);
+        return {x.head<3>(),x.tail<3>()};
+    }
+    std::string_view referenceFrame() const noexcept override {return frame_;}
+    std::string_view referenceOrigin() const noexcept override {return "SSB";}
+};
 
 } // namespace
 
@@ -122,6 +140,10 @@ std::vector<SyntheticObservationSample> VLBISynth::generateWithConfig(
     std::vector<SyntheticObservationSample> samples;
     samples.reserve(epochs.size());
 
+    const Endpoint probe(vlbi.target,vlbi.frame,&targetProvider),one(vlbi.stationOneName,vlbi.frame),two(vlbi.stationTwoName,vlbi.frame),sun("SUN",vlbi.frame);
+    namespace radio=fd::observations::radiometric;
+    const radio::DelayModel delay=[&](const auto& leg,const auto&,const auto&) {return radio::pointMassShapiroSeconds(leg,sun,fd::perturbations::kSunGravitationalParameterKm3PerSec2);};
+    const radio::VlbiLink link(radio::libraryReceptionSolver({},delay),delay);
     for (const double epoch : epochs) {
         const bool station_one_visible =
             targetElevationRadFor(vlbi.stationOneName, station_one, epoch, targetProvider)
@@ -133,30 +155,7 @@ std::vector<SyntheticObservationSample> VLBISynth::generateWithConfig(
             continue;
         }
 
-        const RelativeGeometry station_one_geometry =
-            relativeTargetGeometryFor(vlbi.stationOneName, epoch, targetProvider);
-
-
-        const double station_one_range =
-            station_one_geometry.stationToTargetState.segment<3>(0).norm()
-            + shapiroRangeDelayFor(vlbi.stationOneName, station_one_geometry, targetProvider);
-        const Eigen::Vector3d emitted_target = targetProvider.stateAt(station_one_geometry.emitEpochTdb).head<3>();
-        const std::string station_two_target = std::to_string(od::stationNaifIdFromName(vlbi.stationTwoName));
-        double receive_two = epoch;
-        double station_two_range = 0.0;
-        for (int iteration = 0; iteration < 12; ++iteration) {
-            const Eigen::Vector3d station = sunRelativeState(station_two_target, receive_two).head<3>();
-            const double geometric = (emitted_target - station).norm();
-            station_two_range = geometric + fd::perturbations::computeShapiroRangeDelay(
-                station.norm(), emitted_target.norm(), geometric,
-                fd::perturbations::kSunGravitationalParameterKm3PerSec2);
-            const double next = epoch + (station_two_range - station_one_range)
-                / fd::perturbations::kSpeedOfLightKmPerSec;
-            if (std::abs(next - receive_two) < 1.0e-9) break;
-            receive_two = next;
-        }
-
-        const double truth = station_two_range - station_one_range;
+        const double truth = link.solve(epoch,probe,one,two).differentialRangeKm;
         const double noise = drawNoise();
 
         samples.push_back(SyntheticObservationSample{
