@@ -1,4 +1,5 @@
 build-clang/
+/build-numerical/
 /Output clocks/
 /Output optical/
 /Output EKF/
@@ -8,7 +9,6 @@ Kernels/
 kernels.tm
 test_mrp_class.cpp
 examples/
-third_party/
 Input optical/
 AGENTS.md
 

@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("plot_clocks", ROOT / "plot_clocks.py")
+SPEC = importlib.util.spec_from_file_location("plot_clocks", ROOT / "scripts" / "plot_clocks.py")
 plotter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(plotter)
 

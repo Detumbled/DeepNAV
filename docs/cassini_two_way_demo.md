@@ -116,7 +116,7 @@ phase delays can likewise use separate `TwoWayLink` instances.
 | `radiometric/TwoWayLink` | Event chain, transponder ratio/delay, linear ramp, finite phase count, ground clock callback |
 | `radiometric/PropagationCorrections` | Point-mass Shapiro and zenith-path mapping |
 | `radiometric/SpiceLightTime` | CSPICE CN backend, DSN topocentric elevation, smooth TDB-TT clock offset |
-| `cassini_two_way_demo.cpp` | Local kernel loading, CLI, station selection and console diagnostics |
+| `demos/cassini_two_way_demo.cpp` | Local kernel loading, CLI, station selection and console diagnostics |
 
 `deepnav_radiometric` links only Eigen and the existing numerical light-time
 solver; it has no CSPICE or graphics dependency. `deepnav_radiometric_spice`

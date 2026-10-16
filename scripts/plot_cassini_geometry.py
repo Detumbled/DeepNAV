@@ -11,7 +11,7 @@ import numpy as np
 import plotly.graph_objects as go
 import spiceypy as spice
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EPOCH = "2004-10-10T18:13:06.046"
 COLORS = {"SATURN": "#b88b38", "ENCELADUS": "#1686b0", "CASSINI": "#d55e00"}
 

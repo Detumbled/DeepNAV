@@ -47,7 +47,7 @@
 // listing naif0012.tls, pck00011.tpc, de442.bsp, the Voyager SPKs,
 // gm_de440.tpc, earthstns_itrf93_201023.bsp, the Earth orientation
 // .bpc, and earth_assoc_itrf93.tf).
-static const char* METAKR = "../Kernels.tm";
+static const char* METAKR = "../kernels.tm";
 
 static const double KM_PER_AU = 1.495978707e8;
 static const char*  VOYAGER1  = "-31";       // NAIF ID, Voyager 1

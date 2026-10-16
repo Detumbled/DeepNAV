@@ -11,7 +11,7 @@ class Maneuvers {
         virtual ~Maneuvers() = default;
 
         Maneuvers() = default;
-        Maneuvers(cons
+        Maneuvers(const string&name, const string& date)
 
     private: 
         

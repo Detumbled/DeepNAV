@@ -5,7 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
 # ------------------------------
-# 1. Configuration & Standards
+# Configuration and standards
 # ------------------------------
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -155,7 +155,7 @@ target_link_libraries(deepnav_ekf PUBLIC Eigen3::Eigen deepnav_clocks)
 
 
 # Build the reusable radio model without configuring the full application's
-# graphics/SPICE dependencies. Voyager's demo is not part of these targets.
+# mission-specific dependencies. Voyager's demo is not part of these targets.
 option(DEEPNAV_RADIOMETRIC_ONLY "Build only reusable radio targets and their tests" OFF)
 option(DEEPNAV_RADIOMETRIC_WITH_CSPICE "Build the optional CSPICE radio adapter" ON)
 if(DEEPNAV_RADIOMETRIC_ONLY)
@@ -174,7 +174,7 @@ if(DEEPNAV_RADIOMETRIC_ONLY)
     target_link_libraries(test_ekf PRIVATE deepnav_ekf)
     add_test(NAME test_ekf COMMAND test_ekf)
     if(DEEPNAV_RADIOMETRIC_WITH_CSPICE)
-        add_executable(cassini_two_way_demo cassini_two_way_demo.cpp)
+        add_executable(cassini_two_way_demo demos/cassini_two_way_demo.cpp)
         target_link_libraries(cassini_two_way_demo PRIVATE deepnav_radiometric_spice)
         target_compile_definitions(cassini_two_way_demo PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
         add_test(NAME test_cassini_two_way_benchmark COMMAND cassini_two_way_demo --samples 3)
@@ -182,117 +182,22 @@ if(DEEPNAV_RADIOMETRIC_ONLY)
     return()
 endif()
 
-# ------------------------------
-# 2. Dependencies (Eigen, GLFW, GLEW, OpenGL)
-# ------------------------------
-find_package(Eigen3 CONFIG REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(GLEW REQUIRED)
-find_package(OpenGL REQUIRED)
-
-message(STATUS "Graphics Libraries Found:")
-message(STATUS "  GLFW: ${glfw3_DIR}")
-message(STATUS "  GLEW: ${GLEW_INCLUDE_DIRS}")
-message(STATUS "  OpenGL: ${OPENGL_LIBRARIES}")
-
-# ------------------------------
-# 3. Dependencies (CSPICE)
-# ------------------------------
-if(NOT DEFINED ENV{CSPICE_HOME})
-    message(FATAL_ERROR "Errore: CSPICE_HOME non definita!")
+# Shared numerical dependencies. No graphics or vendored UI libraries.
+find_path(CSPICE_INCLUDE_DIR NAMES SpiceUsr.h
+    HINTS "$ENV{CSPICE_HOME}/include" "$ENV{CSPICE_HOME}/cspice/include")
+find_library(CSPICE_LIB NAMES cspice cspice.a
+    HINTS "$ENV{CSPICE_HOME}/lib" "$ENV{CSPICE_HOME}/cspice/lib")
+if(NOT CSPICE_INCLUDE_DIR OR NOT CSPICE_LIB)
+    message(FATAL_ERROR "CSPICE is required for the full build; set CSPICE_HOME or CSPICE_INCLUDE_DIR/CSPICE_LIB.")
 endif()
 
-set(CSPICE_DIR "$ENV{CSPICE_HOME}")
-
-find_path(CSPICE_INCLUDE_DIR
-    NAMES SpiceUsr.h
-    PATHS "${CSPICE_DIR}/include" "${CSPICE_DIR}/cspice/include"
-    NO_DEFAULT_PATH
-)
-
-find_library(CSPICE_LIB 
-    NAMES cspice cspice.a
-    PATHS "${CSPICE_DIR}/lib" "${CSPICE_DIR}/cspice/lib"
-    NO_DEFAULT_PATH
-)
-
-# ------------------------------
-# 4. ★ NEW: ImGui + ImPlot
-# ------------------------------
-set(IMGUI_DIR  ${CMAKE_SOURCE_DIR}/third_party/imgui)
-set(IMPLOT_DIR ${CMAKE_SOURCE_DIR}/third_party/implot)
-
-add_library(imgui_lib STATIC
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-    ${IMPLOT_DIR}/implot.cpp
-    ${IMPLOT_DIR}/implot_items.cpp
-)
-
-target_include_directories(imgui_lib SYSTEM PUBLIC
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${IMPLOT_DIR}
-)
-
-# ImGui deliberately uses raw memory operations for some internal types.
-# Newer Clang versions diagnose this vendor implementation pattern, so keep
-# that warning scoped to the third-party target rather than disabling it for
-# DeepNAV sources.
-target_compile_options(imgui_lib PRIVATE
-    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>:-Wno-nontrivial-memcall>
-)
-
-# ImGui needs GLFW + OpenGL — reuse what you already found
-target_link_libraries(imgui_lib PUBLIC
-    glfw
-    ${OPENGL_LIBRARIES}
-)
-
-if(APPLE)
-    target_link_libraries(imgui_lib PUBLIC
-        "-framework Cocoa"
-        "-framework IOKit"
-        "-framework CoreVideo"
-    )
-endif()
-
-# ------------------------------
-# 5. Target: project_dependencies (Interface)
-# ------------------------------
 add_library(project_dependencies INTERFACE)
-
 target_include_directories(project_dependencies INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    "${CSPICE_INCLUDE_DIR}"
-    ${GLEW_INCLUDE_DIRS}
-    "${CMAKE_SOURCE_DIR}/third_party/glm"
-)
-
-target_link_libraries(project_dependencies INTERFACE 
-    Eigen3::Eigen 
-    "${CSPICE_LIB}"
-    glfw
-    GLEW::GLEW
-    ${OPENGL_LIBRARIES}
-    imgui_lib          
-    m
-)
-
-if(APPLE)
-    target_link_libraries(project_dependencies INTERFACE 
-        "-framework Cocoa"
-        "-framework IOKit"
-        "-framework CoreVideo"
-    )
-endif()
+    "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CSPICE_INCLUDE_DIR}")
+target_link_libraries(project_dependencies INTERFACE Eigen3::Eigen "${CSPICE_LIB}")
 
 # ------------------------------
-# 6. Static Library (Astro functions)
+# Shared numerical library
 # ------------------------------
 add_radiometric_targets()
 
@@ -352,14 +257,12 @@ add_library(big_functions STATIC ${BIG_FUNCTIONS_SOURCES})
 target_link_libraries(big_functions PUBLIC project_dependencies deepnav_ekf deepnav_radiometric)
 
 # ------------------------------
-# 7. Executables
+# Executables and tests
 # ------------------------------
 set(APP_SOURCE_CANDIDATES
-    Try3D.cpp
-    main.cpp
-    station_catalog_demo.cpp
-    test_stations.cpp
-    test_rkf45.cpp
+    demos/station_catalog_demo.cpp
+    tests/test_stations.cpp
+    tests/test_rkf45.cpp
     tests/test_ephemeris_interpolator.cpp
     tests/test_synth_observations.cpp
     tests/test_synth_source_comparison.cpp
@@ -369,7 +272,7 @@ set(APP_SOURCE_CANDIDATES
     tests/test_centroid_estimator.cpp
     tests/test_cassini_image.cpp
     tests/test_elliptical_centroid.cpp
-    cassini_centroid_demo.cpp
+    demos/cassini_centroid_demo.cpp
     tests/test_geometric_line_of_sight.cpp
     tests/test_clocks.cpp
     tests/test_clock_history.cpp
@@ -377,9 +280,9 @@ set(APP_SOURCE_CANDIDATES
     tests/test_perturbation_models.cpp
     tests/test_spice_environment.cpp
     tests/test_earth_orbit_scenario.cpp
-    ekf_demo.cpp
-    cassini_two_way_demo.cpp
-    cassini_two_way_ekf_demo.cpp
+    demos/ekf_demo.cpp
+    demos/cassini_two_way_demo.cpp
+    demos/cassini_two_way_ekf_demo.cpp
     tests/test_two_way_link.cpp
     tests/test_one_way_link.cpp
     tests/benchmark_two_way.cpp
@@ -505,7 +408,8 @@ foreach(app_src IN LISTS APP_SOURCES)
 
     if(app_name STREQUAL "test_synth_observations"
        OR app_name STREQUAL "test_synth_source_comparison"
-       OR app_name STREQUAL "test_voyager_position_od")
+       OR app_name STREQUAL "test_voyager_position_od"
+       OR app_name STREQUAL "test_stations")
         add_test(NAME ${app_name} COMMAND ${app_name} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
         if(app_name STREQUAL "test_voyager_position_od")
             set_tests_properties(${app_name} PROPERTIES DEPENDS test_synth_observations)

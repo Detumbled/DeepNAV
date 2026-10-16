@@ -7,7 +7,7 @@ import matplotlib
 from matplotlib.patches import Ellipse
 import numpy as np
 
-DEFAULT_DIRECTORY = Path(__file__).resolve().parent / "Output optical"
+DEFAULT_DIRECTORY = Path(__file__).resolve().parents[1] / "Output optical"
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

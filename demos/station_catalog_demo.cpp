@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
     try {
         const od::SpiceErrorModeGuard spice_error_mode("RETURN", "NONE");
 
-        const char* metakernel = argc > 1 ? argv[1] : "../Kernels.tm";
+        const char* metakernel = argc > 1 ? argv[1] : "../kernels.tm";
         loadKernelPool(metakernel);
 
         SpiceDouble reference_et = 0.0;

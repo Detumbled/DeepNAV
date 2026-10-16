@@ -6,7 +6,7 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 
-DEFAULT_DIRECTORY = Path(__file__).resolve().parent / "Output optical" / "cassini"
+DEFAULT_DIRECTORY = Path(__file__).resolve().parents[1] / "Output optical" / "cassini"
 
 
 def main():

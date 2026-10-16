@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plot clock history CSVs. Requires Pandas and Matplotlib; no repository imports.
 
-Run python3 plot_clocks.py with no arguments to use the editable SETUP below.
+Run python3 scripts/plot_clocks.py with no arguments to use the editable SETUP below.
 Explicit command-line arguments are also supported and use their own defaults.
 Display reduction affects curves only and may miss narrow peaks. Never use it
 for Allan analysis or first threshold crossing calculations.
@@ -24,11 +24,11 @@ REQUIRED = ("time_s", "bias_s", "fractional_frequency")
 SIGMAS = ("sigma_bias_s", "sigma_fractional_frequency")
 
 # ============================== SETUP ==============================
-# Used when running: python3 plot_clocks.py
+# Used when running: python3 scripts/plot_clocks.py
 # Relative filenames are resolved inside output_directory, independently of
 # the terminal's working directory. Generate the CSVs with test_clock_history.
 SETUP = {
-    "output_directory": Path(__file__).resolve().parent / "Output clocks",
+    "output_directory": Path(__file__).resolve().parents[1] / "Output clocks",
     "csv_files": ["local.csv", "dsac.csv"],
     "mean_csv": ["local_mean.csv", "dsac_mean.csv"],  # None disables total budget.
     "allan_csv": ["local_allan.csv", "dsac_allan.csv"],  # None uses auto-discovery.

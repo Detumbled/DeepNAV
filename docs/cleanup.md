@@ -1,5 +1,24 @@
 # Repository cleanup
 
+## Source layout and build dependencies
+
+Removed the vendored graphics libraries and the Try3D viewer. The numerical
+build now depends on Eigen and CSPICE without a graphics stack. Console demos
+live in `demos/`, Python plotters in `scripts/`, and the two former root-level
+tests in `tests/`. Plotter defaults, imports and CMake source paths follow the
+new locations. The root README is a short build/layout guide.
+
+`mission_analysis/` provides include/source/test folders for future module work;
+it does not add an empty build target or implement mission-analysis algorithms.
+
+The entries below describe earlier result cleanups, not this source-layout change.
+
+Validation: the full build succeeds, all 13 Python clock-plotter tests pass, and
+34 of 35 CTest cases pass. The remaining `test_rkf45` accuracy failure also
+reproduces when independently compiling the pre-cleanup HEAD test and integrator:
+position closure error is about 0.01177 km over its 60-period propagation. The
+relocated test and integrator mathematics were not changed during this cleanup.
+
 Removed prior generated results from Output EKF, Output clocks, Output optical,
 Output_montecarlo, tests, montecarlo/data, build benchmark result folders, and
 the GMAT result reports. Removed the Cassini one-way
