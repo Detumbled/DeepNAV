@@ -4,6 +4,21 @@ Orbit-determination and flight-dynamics tools in C++23: SPICE geometry,
 numerical propagation, radiometric observations, WLS/EKF estimation, clock
 models, and optical image/geometry utilities.
 
+## Example results
+
+**Cassini two-way WLS:** position errors and postfit residuals for synthetic
+range/Doppler observations, comparing solutions with and without 60 VLBI observations.
+
+![Cassini two-way WLS position errors with and without VLBI](docs/images/cassini_two_way_position_errors.png)
+
+![Cassini two-way range, Doppler, and VLBI postfit residuals](docs/images/cassini_two_way_residuals.png)
+
+**Centroid estimation:** circular and elliptical Gaussian fits to the original
+Cassini Enceladus image, with brightness centroid and residuals. These are
+brightness-center diagnostics on uncalibrated data; the geometric center is not validated.
+
+![Cassini image centroid estimates, Gaussian models, and residuals](docs/images/cassini_centroid.png)
+
 ## Build
 
 Dependencies: **Eigen3** and **CSPICE**, plus CMake 3.20+ and a C++23 compiler.
