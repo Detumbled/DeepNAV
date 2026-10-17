@@ -25,6 +25,9 @@ public:
         const Eigen::Vector3d& directionInertial,
         const CameraAttitude& attitude) const;
 
+    // Inverse pinhole + numerical inverse distortion; unit camera-frame ray.
+    [[nodiscard]] Eigen::Vector3d unproject(PixelCoordinates pixel) const;
+
     [[nodiscard]]
     const CameraIntrinsics& getIntrinsics() const noexcept { return intrinsics_; }
 

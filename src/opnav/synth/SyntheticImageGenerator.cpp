@@ -27,21 +27,23 @@ std::optional<PixelCoordinates> centerOfLight(const image::Image& source) {
 }
 // Unit-sum discrete Gaussian on the oversampled grid. Zero padding preserves
 // loss outside the image; it does not renormalize a clipped target's flux.
-image::Image blur(const image::Image& source, double sigma) {
-    if (sigma == 0) return source;
-    const int radius = int(std::ceil(5*sigma));
-    Eigen::VectorXd kernel(2*radius+1);
-    for (int i = -radius; i <= radius; ++i) kernel[i+radius] = std::exp(-0.5*i*i/(sigma*sigma));
-    kernel /= kernel.sum();
-    image::Image temporary = image::Image::Zero(source.rows(),source.cols());
-    image::Image result = temporary;
-    for (int y = 0; y < source.rows(); ++y) for (int k = -radius; k <= radius; ++k) {
-        const int begin = std::max(0,-k), end = std::min(int(source.cols()),int(source.cols())-k);
-        if (end > begin) temporary.row(y).segment(begin,end-begin) += kernel[k+radius]*source.row(y).segment(begin+k,end-begin);
+image::Image blur(const image::Image& source,double sigmaX,double sigmaY) {
+    const auto kernel=[](double sigma) -> Eigen::VectorXd {
+        if(sigma==0)return Eigen::VectorXd::Ones(1);
+        const int radius=int(std::ceil(5*sigma));Eigen::VectorXd values(2*radius+1);
+        for(int k=-radius;k<=radius;++k)values[k+radius]=std::exp(-.5*k*k/(sigma*sigma));
+        return values/values.sum();
+    };
+    const Eigen::VectorXd kx=kernel(sigmaX),ky=kernel(sigmaY);
+    const int rx=kx.size()/2,ry=ky.size()/2;
+    image::Image temporary=image::Image::Zero(source.rows(),source.cols()),result=temporary;
+    for(int y=0;y<source.rows();++y)for(int k=-rx;k<=rx;++k) {
+        const int begin=std::max(0,-k),end=std::min(int(source.cols()),int(source.cols())-k);
+        if(end>begin)temporary.row(y).segment(begin,end-begin)+=kx[k+rx]*source.row(y).segment(begin+k,end-begin);
     }
-    for (int k = -radius; k <= radius; ++k) {
-        const int begin = std::max(0,-k), end = std::min(int(source.rows()),int(source.rows())-k);
-        if (end > begin) result.middleRows(begin,end-begin) += kernel[k+radius]*temporary.middleRows(begin+k,end-begin);
+    for(int k=-ry;k<=ry;++k) {
+        const int begin=std::max(0,-k),end=std::min(int(source.rows()),int(source.rows())-k);
+        if(end>begin)result.middleRows(begin,end-begin)+=ky[k+ry]*temporary.middleRows(begin+k,end-begin);
     }
     return result;
 }
@@ -55,7 +57,7 @@ SyntheticImageGenerator::SyntheticImageGenerator(CameraModel camera, AttitudePro
                                                  SyntheticImageOptions options)
     : camera_(std::move(camera)), attitude_(std::move(attitude)), options_(std::move(options)) {
     require(bool(attitude_), "An independent truth attitude provider is required.");
-    require(dynamic_cast<const NoDistortion*>(&camera_.getDistortionModel()), "Synthetic rendering currently requires NoDistortion.");
+
     const auto& k = camera_.getIntrinsics();
     require(std::isfinite(k.focalLength) && k.focalLength > 0 &&
             std::isfinite(k.principalPoint.sample) && std::isfinite(k.principalPoint.line) &&
@@ -70,7 +72,11 @@ SyntheticImageGenerator::SyntheticImageGenerator(CameraModel camera, AttitudePro
             nonnegative(options_.psfSigmaPixels) && options_.psfSigmaPixels <= 10 &&
             nonnegative(options_.exposureSeconds) && options_.exposureSamples >= 1 && options_.exposureSamples <= 101,
             "Invalid sphere, flux, PSF, or exposure options.");
-    const int padding = int(std::ceil(5*options_.psfSigmaPixels))+1;
+    require(nonnegative(options_.psfSigmaLinePixels.value_or(options_.psfSigmaPixels)) && options_.psfSigmaLinePixels.value_or(0)<=10 &&
+            nonnegative(options_.albedoContrast) && options_.albedoContrast<1 && nonnegative(options_.lommelSeeligerMix) && options_.lommelSeeligerMix<=1 &&
+            nonnegative(options_.referenceRangeKm) && options_.referenceExposureSeconds>0 && std::isfinite(options_.referenceExposureSeconds), "Invalid realism options.");
+    if(options_.bodyAxesKm)require(options_.bodyAxesKm->allFinite() && (options_.bodyAxesKm->array()>0).all(),"Invalid body axes.");
+    const int padding = int(std::ceil(5*std::max(options_.psfSigmaPixels,options_.psfSigmaLinePixels.value_or(0))))+1;
     require(std::int64_t(options_.size.width+2*padding)*(options_.size.height+2*padding)*
             options_.subpixels*options_.subpixels <= 16777216, "Padded image grid exceeds memory budget.");
     if (options_.sunDirectionCamera) require(options_.sunDirectionCamera->allFinite() &&
@@ -88,17 +94,31 @@ SyntheticImageGenerator::Geometry SyntheticImageGenerator::geometry(const std::s
     const auto direction = core::computeApparentDirection(epoch, observerState, targetProvider);
     const auto attitude = attitude_(epoch);
     const double range = direction.lightTime.geometricLineOfSightKm.norm();
+    Eigen::Vector3d axes=Eigen::Vector3d::Zero();
     double radius = options_.radiusKm;
-    if (radius == 0) {
+    if (radius == 0 || options_.usePckEllipsoid) {
         od::SpiceErrorModeGuard guard;
         SpiceDouble radii[3]; SpiceInt count;
         bodvrd_c(body.c_str(), "RADII", 3, &count, radii);
         od::throwIfSpiceFailed("Synthetic target PCK radii");
         require(count == 3, "Target needs three PCK radii or an explicit sphere radius.");
-        radius = (radii[0]+radii[1]+radii[2])/3;
+        axes=Eigen::Map<Eigen::Vector3d>(radii);
+        if(radius==0)radius=axes.mean();
     }
     require(std::isfinite(radius) && radius > 0 && radius/range < 0.01,
             "Renderer requires a distant sphere (radius/range < 0.01).");
+    if(!options_.usePckEllipsoid)axes.setConstant(radius);
+    if(options_.bodyAxesKm)axes=*options_.bodyAxesKm;
+    require(axes.maxCoeff()/range<0.01,"Renderer requires a distant ellipsoid.");
+    Eigen::Matrix3d bodyToCamera=Eigen::Matrix3d::Identity();
+    if(options_.usePckEllipsoid || options_.bodyAxesKm || options_.albedoContrast>0) {
+        od::SpiceErrorModeGuard guard;SpiceInt frameId;SpiceChar name[128];SpiceBoolean found;
+        cnmfrm_c(body.c_str(),sizeof(name),&frameId,name,&found);od::throwIfSpiceFailed("Target body-fixed frame");
+        require(found,"No body-fixed frame for target.");SpiceDouble rotation[3][3];
+        pxform_c(name,"J2000",direction.lightTime.emissionEpoch.secondsPastJ2000,rotation);od::throwIfSpiceFailed("Body orientation at emission");
+        Eigen::Matrix3d inertial;for(int i=0;i<3;++i)for(int j=0;j<3;++j)inertial(i,j)=rotation[i][j];
+        bodyToCamera=attitude.matrix()*inertial;
+    }
     const Eigen::Vector3d center = attitude.toCamera(direction.unitDirection)*range;
     const auto pixel = camera_.project(center);
     Eigen::Vector3d sun;
@@ -116,7 +136,7 @@ SyntheticImageGenerator::Geometry SyntheticImageGenerator::geometry(const std::s
     truth.lightTimeSeconds = direction.lightTime.lightTimeSeconds;
     truth.phaseAngleRadians = std::acos(std::clamp(sun.dot(-center.normalized()),-1.0,1.0));
     truth.observerPositionKm = observerState.positionKm; truth.observerVelocityKmPerSecond = observerState.velocityKmPerSec;
-    truth.inertialToCamera = attitude.matrix();
+    truth.inertialToCamera = attitude.matrix();truth.bodyAxesKm=axes;truth.bodyToCamera=bodyToCamera;truth.sunDirectionCamera=sun;
     return {std::move(truth), center, sun};
 }
 
@@ -158,7 +178,7 @@ SyntheticOpticalFrame SyntheticImageGenerator::createImage(const std::string& bo
     auto mid = geometry(body,tdb,observer,observerLabel);
     const auto& intrinsics = camera_.getIntrinsics();
     const Eigen::Matrix2d focal = intrinsics.focalLength*intrinsics.focalPlaneToPixelMatrix_PixelPermm;
-    const Eigen::Matrix2d inverse = focal.inverse();
+
     const Eigen::Vector3d c = mid.centerCameraKm;
     // Local projected-area Jacobian. Full-phase Lambert disk integral is 2*pi*R^2/3.
     Eigen::Matrix<double,2,3> perspective;
@@ -166,54 +186,58 @@ SyntheticOpticalFrame SyntheticImageGenerator::createImage(const std::string& bo
     const Eigen::Vector3d z = c.normalized(), x = z.unitOrthogonal(), y = z.cross(x);
     Eigen::Matrix<double,3,2> tangent; tangent.col(0)=x; tangent.col(1)=y;
     const double area = std::abs((focal*perspective*tangent).determinant());
-    const double amplitude = options_.fullPhaseElectrons/(2*std::numbers::pi/3*mid.truth.radiusKm*mid.truth.radiusKm*area);
+    const double budget=options_.fullPhaseElectrons*(options_.referenceRangeKm>0 ?
+        std::pow(options_.referenceRangeKm/mid.truth.rangeKm,2)*options_.exposureSeconds/options_.referenceExposureSeconds : 1);
+    const double amplitude = budget/(2*std::numbers::pi/3*mid.truth.radiusKm*mid.truth.radiusKm*area);
     require(std::isfinite(amplitude), "Invalid source radiance normalization.");
     const int sub = options_.subpixels, width = options_.size.width, height = options_.size.height;
-    const int padding = int(std::ceil(5*options_.psfSigmaPixels))+1;
+    const int padding = int(std::ceil(5*std::max(options_.psfSigmaPixels,options_.psfSigmaLinePixels.value_or(0))))+1;
     // Render beyond the detector so off-frame light can still blur into it.
     image::Image high = image::Image::Zero((height+2*padding)*sub,(width+2*padding)*sub);
+    Eigen::Matrix<double,Eigen::Dynamic,3,Eigen::RowMajor> rays(high.size(),3);
+    for(int l=0;l<high.rows();++l)for(int s=0;s<high.cols();++s)
+        rays.row(l*high.cols()+s)=camera_.unproject({(s+.5)/sub-padding-.5,(l+.5)/sub-padding-.5}).transpose();
     const int samples = options_.exposureSeconds == 0 ? 1 : options_.exposureSamples;
     for (int sample = 0; sample < samples; ++sample) {
         const double offset = options_.exposureSeconds*((sample+0.5)/samples-0.5);
         const auto g = geometry(body,TdbEpoch(tdb.secondsPastJ2000+offset),observer,observerLabel);
         const double r2 = g.truth.radiusKm*g.truth.radiusKm;
+        const bool ellipsoid=options_.usePckEllipsoid || options_.bodyAxesKm.has_value();
+        const Eigen::Matrix3d q=g.truth.bodyToCamera*g.truth.bodyAxesKm.cwiseInverse().cwiseAbs2().asDiagonal()*g.truth.bodyToCamera.transpose();
         for (int l = 0; l < high.rows(); ++l) for (int s = 0; s < high.cols(); ++s) {
-            const Eigen::Vector2d pixel{(s+0.5)/sub-padding-0.5-intrinsics.principalPoint.sample,
-                                         (l+0.5)/sub-padding-0.5-intrinsics.principalPoint.line};
-            const Eigen::Vector2d plane = inverse*pixel;
-            const Eigen::Vector3d ray = Eigen::Vector3d(plane.x(),plane.y(),1).normalized();
-            const double along = ray.dot(g.centerCameraKm);
-            const double discriminant = r2-g.centerCameraKm.cross(ray).squaredNorm();
-            if (along <= 0 || discriminant <= 0) continue;
-            const double distance = along-std::sqrt(discriminant);
-            const Eigen::Vector3d normal = (distance*ray-g.centerCameraKm)/g.truth.radiusKm;
-            high(l,s) += amplitude*std::max(0.0,normal.dot(g.sunCamera))/(sub*sub*samples);
+            const Eigen::Vector3d ray=rays.row(l*high.cols()+s).transpose();
+            double distance;
+            if(ellipsoid) {
+                const double a=ray.dot(q*ray),closest=ray.dot(q*g.centerCameraKm)/a;
+                const Eigen::Vector3d delta=closest*ray-g.centerCameraKm;
+                const double discriminant=1-delta.dot(q*delta);
+                if(closest<=0 || discriminant<=0)continue;
+                distance=closest-std::sqrt(discriminant/a);
+            } else {
+                const double along=ray.dot(g.centerCameraKm),discriminant=r2-g.centerCameraKm.cross(ray).squaredNorm();
+                if(along<=0 || discriminant<=0)continue;
+                distance=along-std::sqrt(discriminant);
+            }
+            const Eigen::Vector3d surface=distance*ray-g.centerCameraKm;
+            const Eigen::Vector3d normal=ellipsoid ? (q*surface).normalized() : surface/g.truth.radiusKm;
+            const double incidence=std::max(0.,normal.dot(g.sunCamera)),emission=std::max(0.,-normal.dot(ray));
+            double brightness=(1-options_.lommelSeeligerMix)*incidence+options_.lommelSeeligerMix*incidence/std::max(1e-12,incidence+emission);
+            if(options_.albedoContrast>0) {
+                const Eigen::Vector3d body=(g.truth.bodyToCamera.transpose()*surface).cwiseQuotient(g.truth.bodyAxesKm).normalized();
+                brightness*=1+options_.albedoContrast*std::cos(3*std::atan2(body.y(),body.x())+.7)*std::sqrt(std::max(0.,1-body.z()*body.z()));
+            }
+            high(l,s)+=amplitude*brightness/(sub*sub*samples);
         }
     }
-    const auto convolved = blur(high,options_.psfSigmaPixels*sub);
+    const auto convolved = blur(high,options_.psfSigmaPixels*sub,options_.psfSigmaLinePixels.value_or(options_.psfSigmaPixels)*sub);
     image::Image source(height,width);
     for (int l = 0; l < height; ++l) for (int s = 0; s < width; ++s)
         source(l,s) = convolved.block((l+padding)*sub,(s+padding)*sub,sub,sub).sum();
     mid.truth.brightnessCenter = centerOfLight(source); mid.truth.seed = noise.seed;
     SyntheticOpticalFrame result;
     result.expectedSourceElectrons = source; result.truth = std::move(mid.truth);
-    result.dn.resize(height,width); result.varianceDn2.resize(height,width);
-    result.mask = image::PixelMask::Zero(height,width);
-    std::mt19937_64 engine(noise.seed);
-    std::normal_distribution<double> read(0,1);
-    for (int l = 0; l < height; ++l) for (int s = 0; s < width; ++s) {
-        const double expected = source(l,s)+noise.backgroundElectrons;
-        require(std::isfinite(expected) && expected <= 1e12, "Unsupported detector electron count.");
-        double electrons = expected;
-        if (noise.shotNoise && expected > 0) electrons = double(std::poisson_distribution<std::uint64_t>(expected)(engine));
-        if (noise.readNoiseElectrons > 0) electrons += noise.readNoiseElectrons*read(engine);
-        double dn = noise.biasDn+electrons/noise.electronsPerDn;
-        if (noise.quantize) dn = std::round(dn);
-        result.mask(l,s) = dn >= noise.saturationDn || dn < 0;
-        result.dn(l,s) = std::clamp(dn,0.0,noise.saturationDn);
-        result.varianceDn2(l,s) = ((noise.shotNoise ? expected : 0)+noise.readNoiseElectrons*noise.readNoiseElectrons)/
-            (noise.electronsPerDn*noise.electronsPerDn)+(noise.quantize ? 1.0/12 : 0);
-    }
+    auto detector=sampleDetector(source,noise);
+    result.dn=std::move(detector.dn);result.varianceDn2=std::move(detector.varianceDn2);result.mask=std::move(detector.mask);
     return result;
 }
 } // namespace fd::opnav::synth

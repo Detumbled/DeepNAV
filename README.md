@@ -13,11 +13,10 @@ range/Doppler observations, comparing solutions with and without 60 VLBI observa
 
 ![Cassini two-way range, Doppler, and VLBI postfit residuals](docs/images/cassini_two_way_residuals.png)
 
-**Centroid estimation:** circular and elliptical Gaussian fits to the original
-Cassini Enceladus image, with brightness centroid and residuals. These are
-brightness-center diagnostics on uncalibrated data; the geometric center is not validated.
+**Optical body estimation:** synthetic observations, C++ body reconstructions,
+and normalized residuals for matched and deliberately mismatched image models.
 
-![Cassini image centroid estimates, Gaussian models, and residuals](docs/images/cassini_centroid.png)
+![Synthetic optical images, fitted bodies, and residuals](benchmarks/cassini_synthetic_optical/realism_images.png)
 
 ## Build
 
@@ -67,6 +66,9 @@ uses SpiceyPy, Plotly and Kaleido. Run plotters as `python3 scripts/<name>.py`.
 - [Cassini one-way EKF](benchmarks/cassini_one_way_ekf/README.md)
 - [Cassini optical image versus SPICE](benchmarks/cassini_optical_validation/README.md)
 - [SPK-driven synthetic optical observations](benchmarks/cassini_synthetic_optical/README.md)
+- [C++ optical body fitting and realism tests](benchmarks/cassini_synthetic_optical/CPP_ESTIMATION.md)
+- [Optical phase, size, signal and shared-error validation](benchmarks/cassini_synthetic_optical/VALIDATION_SWEEP.md)
+- [Optical fit rejection](benchmarks/cassini_synthetic_optical/REJECTION.md)
 - [GMAT comparison](benchmarks/gmat/README.md)
 - [Radiometric models](docs/radiometric.md)
 - [Two-way console/EKF demos](docs/cassini_two_way_demo.md)

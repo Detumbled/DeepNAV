@@ -3,6 +3,7 @@
 #include "opnav/CameraModel.hpp"
 #include "opnav/image/CentroidEstimator.hpp"
 #include "dynamics/StateProvider.hpp"
+#include "opnav/synth/DetectorModel.hpp"
 #include <functional>
 #include <optional>
 #include <string>
@@ -12,24 +13,19 @@ namespace fd::opnav::synth {
 struct SyntheticImageOptions {
     ImageSize size{128, 128};
     double radiusKm{0}; // Zero: use mean of target PCK radii. Otherwise declared sphere radius.
-    double fullPhaseElectrons{1e6}; // Total at midpoint range, over this exposure, before clipping.
+    double fullPhaseElectrons{1e6}; // Lambert-sphere-equivalent budget; alternate surfaces are not renormalized.
     double psfSigmaPixels{1};
     double exposureSeconds{0.06};
+    std::optional<double> psfSigmaLinePixels; // Elliptical truth PSF, sample sigma above.
+    bool usePckEllipsoid{false};
+    std::optional<Eigen::Vector3d> bodyAxesKm;
+    double albedoContrast{0}; // Body-fixed smooth pattern, amplitude in [0,1).
+    double lommelSeeligerMix{0}; // Blend with Lambert, in [0,1].
+    double referenceRangeKm{0},referenceExposureSeconds{0.06}; // Optional physical count scaling.
     int exposureSamples{5}; // Uniform shutter, midpoint quadrature.
     int subpixels{4}; // Rendering and PSF convolution before detector pixel integration.
     // Optional synthetic lighting for controlled phase tests. Otherwise use SPK Sun.
     std::optional<Eigen::Vector3d> sunDirectionCamera;
-};
-
-struct OpticalDetectorNoise {
-    double electronsPerDn{1};
-    double backgroundElectrons{20}; // Per pixel per exposure, excluding bias.
-    double readNoiseElectrons{3};
-    double biasDn{0};
-    double saturationDn{4095};
-    bool shotNoise{true};
-    bool quantize{true};
-    std::uint64_t seed{1}; // Use a different seed for independent exposures.
 };
 
 struct OpticalPixelNoise {
@@ -44,6 +40,8 @@ struct OpticalFrameTruth {
     std::optional<PixelCoordinates> brightnessCenter; // Noiseless source after PSF and detector crop.
     double rangeKm{0}, lightTimeSeconds{0}, phaseAngleRadians{0}, radiusKm{0};
     Eigen::Vector3d observerPositionKm, observerVelocityKmPerSecond;
+    Eigen::Vector3d bodyAxesKm, sunDirectionCamera;
+    Eigen::Matrix3d bodyToCamera;
     Eigen::Matrix3d inertialToCamera;
     std::uint64_t seed{0};
 };
@@ -61,8 +59,9 @@ struct SyntheticOpticalMeasurement {
 };
 
 // Caller loads SPICE kernels and supplies truth attitude. No kernel-pool mutation.
-// First version: pinhole/NoDistortion camera, one distant spherical body,
-// Lambertian brightness, Gaussian PSF, no stars, terrain, or occulting bodies.
+// One distant body: sphere or triaxial ellipsoid, Lambert/LS blend and optional
+// body-fixed albedo. Supports inverse camera distortion and an axis-aligned
+// elliptical PSF. No terrain, stars, or mutually occulting bodies.
 class SyntheticImageGenerator {
 public:
     using AttitudeProvider = std::function<CameraAttitude(TdbEpoch)>;

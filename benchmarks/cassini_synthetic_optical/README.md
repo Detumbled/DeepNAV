@@ -1,5 +1,10 @@
 # SPK-driven synthetic optical observations
 
+The current [C++ body estimator and realism experiment](CPP_ESTIMATION.md)
+extends this baseline with ellipsoids, albedo/reflectance differences, elliptical
+PSF, calibration/pointing perturbations, and exposure comparisons. It returns
+fitted geometric centers and covariances; Python produces the diagnostic plots.
+
 Reusable API: [SyntheticImageGenerator](../../include/opnav/synth/SyntheticImageGenerator.hpp).
 The caller loads kernels, configures a camera and an independent truth attitude,
 then requests a direct pixel measurement or a rendered image:
@@ -46,11 +51,11 @@ It must remain independent of the estimated spacecraft state.
 line Gaussian noise and its 2x2 covariance. The center must be inside the detector.
 This stream is a midpoint observation and deliberately has no photocenter bias.
 
-`createImage` traces subpixel rays through a sphere with Lambertian illumination.
+By default, `createImage` traces subpixel rays through a sphere with Lambertian illumination.
 The sphere radius is explicit, or defaults to the mean of the target's three PCK
 radii. Sun geometry is evaluated at target emission time; an optional camera-frame
 illumination direction supports controlled phase tests. The distant-body model
-requires radius/range < 0.01. Solar light-time, terrain, triaxial shape, stars,
+requires radius/range < 0.01. Solar light-time, terrain, stars,
 mutual occultations, and calibrated surface reflectance are not included.
 
 Uniform-shutter midpoint quadrature evaluates geometry and attitude across the
@@ -65,9 +70,11 @@ integral; actual counts vary with phase and exposure geometry. Changing exposure
 duration alone does not change this declared count budget: change both when
 modeling a fixed physical photon rate.
 
-The initial renderer requires a pinhole `NoDistortion` camera and rejects other
-distortion models. Full-resolution mission-calibrated camera simulation is not
-claimed by this baseline.
+The renderer now accepts invertible camera distortion through `CameraModel::unproject`;
+the default remains pinhole `NoDistortion`. Full-resolution mission-calibrated
+camera simulation is not claimed by this baseline. The optional
+`referenceRangeKm`/`referenceExposureSeconds` settings enable physical relative
+range/exposure scaling of the declared photon budget.
 
 ## Noise and truth separation
 
