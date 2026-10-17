@@ -1,0 +1,42 @@
+{
+  "frame": 0,
+  "utc": "2004-10-10T00:00:00.000000",
+  "quadrature_order": 24,
+  "known_psf_sigma_pixels": 0.8,
+  "truth_geometric_center": [
+    63.22999999999213,
+    62.73999999999889
+  ],
+  "truth_brightness_center": [
+    66.26251886064176,
+    63.86953617017322
+  ],
+  "gaussian_center": [
+    66.12619055794949,
+    63.851125354039915
+  ],
+  "sphere_geometric_center": [
+    63.211404744222335,
+    62.73574727438774
+  ],
+  "gaussian_geometric_error_pixels": 3.102018584791863,
+  "sphere_geometric_error_pixels": 0.019075356150485955,
+  "gaussian_reduced_chi_squared": 99.04413739181767,
+  "sphere_reduced_chi_squared": 1.0904228095230795,
+  "fitted_radius_pixels": 7.1535356995224415,
+  "fitted_phase_degrees": 68.52570876635264,
+  "truth_phase_degrees": 68.17385946208957,
+  "fitted_sun_image_angle_degrees": 20.287031927420323,
+  "sphere_function_evaluations": 11,
+  "formal_center_covariance_pixels2": [
+    [
+      5.2503173524882995e-05,
+      1.092370870209603e-05
+    ],
+    [
+      1.092370870209603e-05,
+      2.826028234521416e-05
+    ]
+  ],
+  "assumptions": "Uniform Lambert sphere; independently calibrated Gaussian PSF; fixed supplied detector variances; distant-body projection. Truth used only after fitting. Formal covariance excludes model/calibration error."
+}

@@ -66,6 +66,43 @@ function(add_radiometric_targets)
             src/observations/radiometric/SpiceLightTime.cpp)
         target_include_directories(deepnav_radiometric_spice PUBLIC ${CSPICE_INCLUDE_DIR})
         target_link_libraries(deepnav_radiometric_spice PUBLIC deepnav_radiometric ${CSPICE_LIB})
+        add_library(deepnav_optical_synth STATIC src/opnav/synth/SyntheticImageGenerator.cpp
+            src/opnav/core/ApparentDirection.cpp src/opnav/CameraModel.cpp
+            src/opnav/CameraAttitude.cpp src/opnav/DistortionModel.cpp
+            src/opnav/image/CircularGaussian.cpp src/opnav/image/CentroidEstimator.cpp)
+        target_link_libraries(deepnav_optical_synth PUBLIC deepnav_radiometric_spice)
+        target_compile_options(deepnav_optical_synth PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        add_executable(cassini_synthetic_optical benchmarks/cassini_synthetic_optical/main.cpp)
+        target_link_libraries(cassini_synthetic_optical PRIVATE deepnav_optical_synth)
+        target_compile_definitions(cassini_synthetic_optical PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        add_executable(cassini_synthetic_sequence benchmarks/cassini_synthetic_optical/sequence.cpp)
+        target_link_libraries(cassini_synthetic_sequence PRIVATE deepnav_optical_synth deepnav_ekf)
+        target_compile_definitions(cassini_synthetic_sequence PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_options(cassini_synthetic_sequence PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-O2>)
+        add_executable(test_synthetic_optical tests/test_synthetic_optical.cpp)
+        target_link_libraries(test_synthetic_optical PRIVATE deepnav_optical_synth)
+        target_compile_definitions(test_synthetic_optical PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME test_synthetic_optical COMMAND test_synthetic_optical)
+        set_tests_properties(test_synthetic_optical PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+        add_executable(cassini_optical_validation benchmarks/cassini_optical_validation/main.cpp
+            src/opnav/core/ApparentDirection.cpp src/opnav/CameraModel.cpp
+            src/opnav/CameraAttitude.cpp src/opnav/DistortionModel.cpp
+            src/opnav/image/CassiniImage.cpp)
+        target_link_libraries(cassini_optical_validation PRIVATE deepnav_radiometric_spice)
+        target_compile_definitions(cassini_optical_validation PRIVATE DEEPNAV_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Input Optical/N1476124698_2.IMG"
+           AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Kernels/Cassini/cassini_2004_opnav.tm")
+            add_test(NAME test_cassini_optical_spice COMMAND cassini_optical_validation
+                --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-optical-validation)
+        endif()
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Input Optical/N1475349073_2.IMG"
+           AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Kernels/Cassini/ck/04271_04276ra.bc"
+           AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Kernels/Cassini/cassini_2004_opnav.tm")
+            add_test(NAME test_cassini_optical_spice_oct01 COMMAND cassini_optical_validation
+                --image "${CMAKE_CURRENT_SOURCE_DIR}/Input Optical/N1475349073_2.IMG"
+                --kernels ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/cassini_optical_validation/two_images.tm
+                --output ${CMAKE_CURRENT_BINARY_DIR}/cassini-optical-validation-oct01)
+        endif()
         add_library(deepnav_wls_spice STATIC src/filters/WLS.cpp
             src/filters/BatchLeastSquaresDriver.cpp src/stations/StationCatalog.cpp)
         target_include_directories(deepnav_wls_spice PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CSPICE_INCLUDE_DIR})

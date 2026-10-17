@@ -65,6 +65,8 @@ uses SpiceyPy, Plotly and Kaleido. Run plotters as `python3 scripts/<name>.py`.
 - [Cassini trajectory](benchmarks/cassini_trajectory/README.md)
 - [Cassini two-way WLS](benchmarks/cassini_two_way_wls/README.md)
 - [Cassini one-way EKF](benchmarks/cassini_one_way_ekf/README.md)
+- [Cassini optical image versus SPICE](benchmarks/cassini_optical_validation/README.md)
+- [SPK-driven synthetic optical observations](benchmarks/cassini_synthetic_optical/README.md)
 - [GMAT comparison](benchmarks/gmat/README.md)
 - [Radiometric models](docs/radiometric.md)
 - [Two-way console/EKF demos](docs/cassini_two_way_demo.md)
